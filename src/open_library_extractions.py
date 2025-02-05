@@ -64,6 +64,7 @@ def get_connection():
 def release_connection(conn):
     """Release a connection back to the pool."""
     POSTGRES_POOL.putconn(conn)
+    print("Connection released.")
 
 
 # %%
@@ -215,106 +216,112 @@ works_text_file_path = get_works_text_file_path()
 
 def load_db_authors_postgres(authors_text_file_path, max_rows_to_read=None):
     row_counter = 0
+    pg_conn = None
+    pg_cursor = None
+    try:
+        pg_conn = get_connection()
+        pg_cursor = pg_conn.cursor()
 
-    pg_conn = get_connection()
-    pg_cursor = pg_conn.cursor()
+        # read the first few lines of the text file
+        with open(authors_text_file_path, "r") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                # The file is tab-separated. The columns are:
+                # 0: Type (/type/author)
+                # 1: Author key (e.g. /authors/OL10000278A)
+                # 2: Revision number (e.g. 3)
+                # 3: Timestamp (e.g. 2021-12-26T21:22:34.663256)
+                # 4: JSON blob with the record details
+                parts = line.split("\t")
 
-    # read the first few lines of the text file
-    with open(authors_text_file_path, "r") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            # The file is tab-separated. The columns are:
-            # 0: Type (/type/author)
-            # 1: Author key (e.g. /authors/OL10000278A)
-            # 2: Revision number (e.g. 3)
-            # 3: Timestamp (e.g. 2021-12-26T21:22:34.663256)
-            # 4: JSON blob with the record details
-            parts = line.split("\t")
+                if len(parts) < 5:
+                    # Skip lines that don't have enough columns.
+                    break
 
-            if len(parts) < 5:
-                # Skip lines that don't have enough columns.
-                break
+                line_type = parts[0]
+                line_key = parts[1]
+                line_revision = parts[2]
+                line_last_modified = parts[3]
+                line_json_blob = parts[4]
 
-            line_type = parts[0]
-            line_key = parts[1]
-            line_revision = parts[2]
-            line_last_modified = parts[3]
-            line_json_blob = parts[4]
+                try:
+                    record = json.loads(line_json_blob)
+                except Exception as e:
+                    print(f"JSON parse error for line_key: {line_key}: {e}")
+                    continue
 
-            try:
-                record = json.loads(line_json_blob)
-            except Exception as e:
-                print(f"JSON parse error for line_key: {line_key}: {e}")
-                continue
+                if verbose:
+                    print("---------------- Line Details ----------------")
+                    print(f"line_type: {line_type}")
+                    print(f"line_key: {line_key}")
+                    print(f"line_revision: {line_revision}")
+                    print(f"line_last_modified: {line_last_modified}")
+                    print(f"line_json_blob: {line_json_blob}")
 
-            if verbose:
-                print("---------------- Line Details ----------------")
-                print(f"line_type: {line_type}")
-                print(f"line_key: {line_key}")
-                print(f"line_revision: {line_revision}")
-                print(f"line_last_modified: {line_last_modified}")
-                print(f"line_json_blob: {line_json_blob}")
+                    pprint_dict(record)
 
-                pprint_dict(record)
+                name = record.get("name", "")
+                source_records = json.dumps(record.get("source_records", []))
+                latest_revision = record.get("latest_revision")
+                created = record.get("created", {}).get("value")
 
-            name = record.get("name", "")
-            source_records = json.dumps(record.get("source_records", []))
-            latest_revision = record.get("latest_revision")
-            created = record.get("created", {}).get("value")
+                if verbose:
+                    print(f"name: {name}")
+                    print(f"source_records: {source_records}")
+                    print(f"created: {created}")
 
-            if verbose:
-                print(f"name: {name}")
-                print(f"source_records: {source_records}")
-                print(f"created: {created}")
+                query = """
+                INSERT INTO authors (
+                    author_key, revision, last_modified, name, 
+                    source_records, latest_revision, created
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (author_key)
+                DO UPDATE SET
+                    revision = EXCLUDED.revision,
+                    last_modified = EXCLUDED.last_modified,
+                    name = EXCLUDED.name,
+                    source_records = EXCLUDED.source_records,
+                    latest_revision = EXCLUDED.latest_revision,
+                    created = EXCLUDED.created
+                """
 
-            query = """
-            INSERT INTO authors (
-                author_key, revision, last_modified, name, 
-                source_records, latest_revision, created
-            )
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (author_key)
-            DO UPDATE SET
-                revision = EXCLUDED.revision,
-                last_modified = EXCLUDED.last_modified,
-                name = EXCLUDED.name,
-                source_records = EXCLUDED.source_records,
-                latest_revision = EXCLUDED.latest_revision,
-                created = EXCLUDED.created
-            """
+                pg_cursor.execute(
+                    query,
+                    (
+                        line_key,
+                        line_revision,
+                        line_last_modified,
+                        name,
+                        source_records,
+                        latest_revision,
+                        created,
+                    ),
+                )
 
-            pg_cursor.execute(
-                query,
-                (
-                    line_key,
-                    line_revision,
-                    line_last_modified,
-                    name,
-                    source_records,
-                    latest_revision,
-                    created,
-                ),
-            )
+                if verbose:
+                    print("query")
+                    print(query)
 
-            if verbose:
-                print("query")
-                print(query)
-
-            row_counter += 1
-            if row_counter % 10000 == 0:
-                print(f"Authors row count: {row_counter}")
-            if row_counter % 10000 == 0:
-                print("Committing")
-                pg_conn.commit()
-            if max_rows_to_read and row_counter >= max_rows_to_read:
-                break
+                row_counter += 1
+                if row_counter % 10000 == 0:
+                    print(f"Authors row count: {row_counter}")
+                if row_counter % 10000 == 0:
+                    print("Committing")
+                    pg_conn.commit()
+                if max_rows_to_read and row_counter >= max_rows_to_read:
+                    break
 
         pg_conn.commit()
-        pg_cursor.close()
 
         print("Authors row count updated: ", row_counter)
+    finally:
+        if pg_cursor:
+            pg_cursor.close()
+        if pg_conn:
+            release_connection(pg_conn)
 
 
 verbose = True
@@ -329,124 +336,130 @@ load_db_authors_postgres(authors_text_file_path, max_rows_to_read=max_rows_to_re
 
 def load_db_works_postgres(works_text_file_path, max_rows_to_read=None, verbose=False):
     row_counter = 0
-    pg_conn = get_connection()
-    pg_cursor = pg_conn.cursor()
+    pg_conn = None
+    pg_cursor = None
+    try:
+        pg_conn = get_connection()
+        pg_cursor = pg_conn.cursor()
 
-    # Read the first few lines of the text file
-    with open(works_text_file_path, "r") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
+        # Read the first few lines of the text file
+        with open(works_text_file_path, "r") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
 
-            parts = line.split("\t")
-            if len(parts) < 5:
-                break
+                parts = line.split("\t")
+                if len(parts) < 5:
+                    break
 
-            line_type = parts[0]
-            line_key = parts[1]  # work_key
-            line_revision = parts[2]
-            line_last_modified = parts[3]
-            line_json_blob = parts[4]
+                line_type = parts[0]
+                line_key = parts[1]  # work_key
+                line_revision = parts[2]
+                line_last_modified = parts[3]
+                line_json_blob = parts[4]
 
-            if verbose:
-                print("---------------- Line Details ----------------")
-                print(f"line_type: {line_type}")
-                print(f"line_key: {line_key}")
-                print(f"line_revision: {line_revision}")
-                print(f"line_last_modified: {line_last_modified}")
-                print(f"line_json_blob: {line_json_blob}")
+                if verbose:
+                    print("---------------- Line Details ----------------")
+                    print(f"line_type: {line_type}")
+                    print(f"line_key: {line_key}")
+                    print(f"line_revision: {line_revision}")
+                    print(f"line_last_modified: {line_last_modified}")
+                    print(f"line_json_blob: {line_json_blob}")
 
-            try:
-                record = json.loads(line_json_blob)
-            except Exception as e:
-                print(f"JSON parse error for line_key: {line_key}: {e}")
-                continue
+                try:
+                    record = json.loads(line_json_blob)
+                except Exception as e:
+                    print(f"JSON parse error for line_key: {line_key}: {e}")
+                    continue
 
-            title = record.get("title", "")
-            created = record.get("created", {}).get("value", "")
-            covers = json.dumps(record.get("covers", []))
-            latest_revision = record.get("latest_revision", "")
-            authors_list = record.get("authors", [])
+                title = record.get("title", "")
+                created = record.get("created", {}).get("value", "")
+                covers = json.dumps(record.get("covers", []))
+                latest_revision = record.get("latest_revision", "")
+                authors_list = record.get("authors", [])
 
-            # ✅ Step 1: Ensure authors exist before inserting into `work_authors`
-            for author in authors_list:
-                author_key = (
-                    author.get("author", {}).get("key")
-                    if isinstance(author.get("author", {}), dict)
-                    else author.get("author", {})
-                )
-                if author_key:
-                    pg_cursor.execute(
-                        """
-                        INSERT INTO authors (author_key)
-                        VALUES (%s)
-                        ON CONFLICT (author_key) DO NOTHING;
-                        """,
-                        (author_key,),
+                # ✅ Step 1: Ensure authors exist before inserting into `work_authors`
+                for author in authors_list:
+                    author_key = (
+                        author.get("author", {}).get("key")
+                        if isinstance(author.get("author", {}), dict)
+                        else author.get("author", {})
                     )
+                    if author_key:
+                        pg_cursor.execute(
+                            """
+                            INSERT INTO authors (author_key)
+                            VALUES (%s)
+                            ON CONFLICT (author_key) DO NOTHING;
+                            """,
+                            (author_key,),
+                        )
 
-            # ✅ Step 2: Insert work into `works`
-            pg_cursor.execute(
-                """
-                INSERT INTO works (
-                    work_key, revision, last_modified, title, 
-                    created, covers, latest_revision, authors
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT(work_key)
-                DO UPDATE SET
-                    revision = EXCLUDED.revision,
-                    last_modified = EXCLUDED.last_modified,
-                    title = EXCLUDED.title,
-                    created = EXCLUDED.created,
-                    covers = EXCLUDED.covers,
-                    latest_revision = EXCLUDED.latest_revision,
-                    authors = EXCLUDED.authors;
-                """,
-                (
-                    line_key,
-                    line_revision,
-                    line_last_modified,
-                    title,
-                    created,
-                    covers,
-                    latest_revision,
-                    json.dumps(authors_list),
-                ),
-            )
-
-            # ✅ Step 3: Insert relationships into `work_authors`
-            for author in authors_list:
-                author_key = (
-                    author.get("author", {}).get("key")
-                    if isinstance(author.get("author", {}), dict)
-                    else author.get("author", {})
-                )
-                if author_key:
-                    pg_cursor.execute(
-                        """
-                        INSERT INTO work_authors (work_key, author_key) 
-                        VALUES (%s, %s)
-                        ON CONFLICT (work_key, author_key) DO NOTHING;
-                        """,
-                        (line_key, author_key),
+                # ✅ Step 2: Insert work into `works`
+                pg_cursor.execute(
+                    """
+                    INSERT INTO works (
+                        work_key, revision, last_modified, title, 
+                        created, covers, latest_revision, authors
                     )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(work_key)
+                    DO UPDATE SET
+                        revision = EXCLUDED.revision,
+                        last_modified = EXCLUDED.last_modified,
+                        title = EXCLUDED.title,
+                        created = EXCLUDED.created,
+                        covers = EXCLUDED.covers,
+                        latest_revision = EXCLUDED.latest_revision,
+                        authors = EXCLUDED.authors;
+                    """,
+                    (
+                        line_key,
+                        line_revision,
+                        line_last_modified,
+                        title,
+                        created,
+                        covers,
+                        latest_revision,
+                        json.dumps(authors_list),
+                    ),
+                )
 
-            row_counter += 1
-            if row_counter % 1000 == 0:
-                print(f"Works row count: {row_counter}")
-            if row_counter % 10000 == 0:
-                pg_conn.commit()
+                # ✅ Step 3: Insert relationships into `work_authors`
+                for author in authors_list:
+                    author_key = (
+                        author.get("author", {}).get("key")
+                        if isinstance(author.get("author", {}), dict)
+                        else author.get("author", {})
+                    )
+                    if author_key:
+                        pg_cursor.execute(
+                            """
+                            INSERT INTO work_authors (work_key, author_key) 
+                            VALUES (%s, %s)
+                            ON CONFLICT (work_key, author_key) DO NOTHING;
+                            """,
+                            (line_key, author_key),
+                        )
 
-            if max_rows_to_read and row_counter >= max_rows_to_read:
-                break
+                row_counter += 1
+                if row_counter % 1000 == 0:
+                    print(f"Works row count: {row_counter}")
+                if row_counter % 10000 == 0:
+                    pg_conn.commit()
 
-    pg_conn.commit()
-    pg_cursor.close()
-    pg_conn.close()
+                if max_rows_to_read and row_counter >= max_rows_to_read:
+                    break
 
-    print("Works row count updated:", row_counter)
+        pg_conn.commit()
+
+        print("Works row count updated:", row_counter)
+    finally:
+        if pg_cursor:
+            pg_cursor.close()
+        if pg_conn:
+            release_connection(pg_conn)
 
 
 verbose = True
