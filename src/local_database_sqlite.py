@@ -262,7 +262,7 @@ def load_db_works_sqlite(works_text_file_path, max_rows_to_read=None):
 
             query = """
             INSERT INTO works (
-                work_key, revision, last_modified, title, 
+                work_key, revision, last_modified, title,
                 created, covers, latest_revision, authors
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)

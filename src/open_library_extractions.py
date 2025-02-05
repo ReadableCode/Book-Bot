@@ -45,9 +45,9 @@ POSTGRES_PORT = os.getenv("POSTGRES_PORT")
 
 
 # Initialize the connection pool (adjust minconn and maxconn as needed)
-POSTGRES_POOL = psycopg2.pool.SimpleConnectionPool(
+POSTGRES_POOL = pool.SimpleConnectionPool(
     minconn=1,
-    maxconn=5,  # Limit connections to avoid resource waste
+    maxconn=20,  # Limit connections to avoid resource waste
     host=POSTGRES_URL,
     user=POSTGRES_USER,
     password=POSTGRES_PASSWORD,
@@ -70,9 +70,7 @@ def release_connection(conn):
 # Connect To Postgres #
 
 
-def create_and_test_table():
-    """Creates a books table in book_bot DB and inserts a test record."""
-
+def ensure_postgres_tables():
     pg_conn = get_connection()
     pg_cursor = pg_conn.cursor()
 
@@ -82,42 +80,53 @@ def create_and_test_table():
         CREATE TABLE IF NOT EXISTS authors (
             author_key TEXT PRIMARY KEY,
             revision INTEGER,
-            last_modified TIMESTAMP,
+            last_modified TIMESTAMP WITHOUT TIME ZONE,
             name TEXT,
             source_records TEXT,
             latest_revision INTEGER,
-            created TIMESTAMP
+            created TIMESTAMP WITHOUT TIME ZONE
         );
-    """
+        """
+    )
+
+    # Create works table
+    pg_cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS works (
+            work_key TEXT PRIMARY KEY,
+            revision INTEGER,
+            last_modified TIMESTAMP WITHOUT TIME ZONE,
+            title TEXT,
+            created TIMESTAMP WITHOUT TIME ZONE,
+            covers TEXT,
+            latest_revision INTEGER,
+            authors TEXT
+        );
+        """
+    )
+
+    # Create work_authors table (many-to-many relationship)
+    pg_cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS work_authors (
+            work_key TEXT,
+            author_key TEXT,
+            FOREIGN KEY (work_key) REFERENCES works(work_key) ON DELETE CASCADE,
+            FOREIGN KEY (author_key) REFERENCES authors(author_key) ON DELETE CASCADE,
+            PRIMARY KEY (work_key, author_key)
+        );
+        """
     )
 
     pg_conn.commit()
     pg_cursor.close()
     pg_conn.close()
 
-    print("Table ensured.")
-
-    # test query
-    pg_conn = psycopg2.connect(
-        host=POSTGRES_URL,
-        user=POSTGRES_USER,
-        password=POSTGRES_PASSWORD,
-        dbname=POSTGRES_DB,
-        port=POSTGRES_PORT,
-    )
-    pg_cursor = pg_conn.cursor()
-
-    pg_cursor.execute(
-        """
-        SELECT * FROM authors LIMIT 1;
-        """
-    )
-    record = pg_cursor.fetchone()
-    print("Test record:")
-    print(record)
+    print("Tables ensured.")
 
 
-create_and_test_table()
+# Run table creation
+ensure_postgres_tables()
 
 
 # %%
@@ -310,8 +319,140 @@ def load_db_authors_postgres(authors_text_file_path, max_rows_to_read=None):
 
 verbose = True
 authors_text_file_path = get_authors_text_file_path()
-max_rows_to_read = 10
+max_rows_to_read = 100000
 load_db_authors_postgres(authors_text_file_path, max_rows_to_read=max_rows_to_read)
+
+
+# %%
+# Book Data: Works #
+
+
+def load_db_works_postgres(works_text_file_path, max_rows_to_read=None, verbose=False):
+    row_counter = 0
+    pg_conn = get_connection()
+    pg_cursor = pg_conn.cursor()
+
+    # Read the first few lines of the text file
+    with open(works_text_file_path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+
+            parts = line.split("\t")
+            if len(parts) < 5:
+                break
+
+            line_type = parts[0]
+            line_key = parts[1]  # work_key
+            line_revision = parts[2]
+            line_last_modified = parts[3]
+            line_json_blob = parts[4]
+
+            if verbose:
+                print("---------------- Line Details ----------------")
+                print(f"line_type: {line_type}")
+                print(f"line_key: {line_key}")
+                print(f"line_revision: {line_revision}")
+                print(f"line_last_modified: {line_last_modified}")
+                print(f"line_json_blob: {line_json_blob}")
+
+            try:
+                record = json.loads(line_json_blob)
+            except Exception as e:
+                print(f"JSON parse error for line_key: {line_key}: {e}")
+                continue
+
+            title = record.get("title", "")
+            created = record.get("created", {}).get("value", "")
+            covers = json.dumps(record.get("covers", []))
+            latest_revision = record.get("latest_revision", "")
+            authors_list = record.get("authors", [])
+
+            # ✅ Step 1: Ensure authors exist before inserting into `work_authors`
+            for author in authors_list:
+                author_key = (
+                    author.get("author", {}).get("key")
+                    if isinstance(author.get("author", {}), dict)
+                    else author.get("author", {})
+                )
+                if author_key:
+                    pg_cursor.execute(
+                        """
+                        INSERT INTO authors (author_key)
+                        VALUES (%s)
+                        ON CONFLICT (author_key) DO NOTHING;
+                        """,
+                        (author_key,),
+                    )
+
+            # ✅ Step 2: Insert work into `works`
+            pg_cursor.execute(
+                """
+                INSERT INTO works (
+                    work_key, revision, last_modified, title, 
+                    created, covers, latest_revision, authors
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT(work_key)
+                DO UPDATE SET
+                    revision = EXCLUDED.revision,
+                    last_modified = EXCLUDED.last_modified,
+                    title = EXCLUDED.title,
+                    created = EXCLUDED.created,
+                    covers = EXCLUDED.covers,
+                    latest_revision = EXCLUDED.latest_revision,
+                    authors = EXCLUDED.authors;
+                """,
+                (
+                    line_key,
+                    line_revision,
+                    line_last_modified,
+                    title,
+                    created,
+                    covers,
+                    latest_revision,
+                    json.dumps(authors_list),
+                ),
+            )
+
+            # ✅ Step 3: Insert relationships into `work_authors`
+            for author in authors_list:
+                author_key = (
+                    author.get("author", {}).get("key")
+                    if isinstance(author.get("author", {}), dict)
+                    else author.get("author", {})
+                )
+                if author_key:
+                    pg_cursor.execute(
+                        """
+                        INSERT INTO work_authors (work_key, author_key) 
+                        VALUES (%s, %s)
+                        ON CONFLICT (work_key, author_key) DO NOTHING;
+                        """,
+                        (line_key, author_key),
+                    )
+
+            row_counter += 1
+            if row_counter % 1000 == 0:
+                print(f"Works row count: {row_counter}")
+            if row_counter % 10000 == 0:
+                pg_conn.commit()
+
+            if max_rows_to_read and row_counter >= max_rows_to_read:
+                break
+
+    pg_conn.commit()
+    pg_cursor.close()
+    pg_conn.close()
+
+    print("Works row count updated:", row_counter)
+
+
+verbose = True
+works_text_file_path = get_works_text_file_path()
+max_rows_to_read = 10
+load_db_works_postgres(works_text_file_path, max_rows_to_read=max_rows_to_read)
 
 
 # %%
@@ -319,33 +460,91 @@ load_db_authors_postgres(authors_text_file_path, max_rows_to_read=max_rows_to_re
 
 def query_postgres_authors():
     """Fetches up to 100 authors from PostgreSQL and returns a DataFrame."""
-    conn = psycopg2.connect(
-        host=POSTGRES_URL,
-        user=POSTGRES_USER,
-        password=POSTGRES_PASSWORD,
-        dbname=POSTGRES_DB,
-        port=POSTGRES_PORT,
-    )
-    cursor = conn.cursor()
+    pg_conn = None
+    try:
+        pg_conn = get_connection()
+        pg_cursor = pg_conn.cursor()
 
-    cursor.execute("SELECT * FROM authors LIMIT 100;")
+        pg_cursor.execute("SELECT * FROM authors LIMIT 100;")
 
-    if not cursor.description:
-        raise ValueError("No data found in the table.")
+        if not pg_cursor.description:
+            raise ValueError("No data found in the table.")
 
-    # Get column names from the cursor description
-    columns = [desc[0] for desc in cursor.description]
+        # Get column names from the cursor description
+        columns = [desc[0] for desc in pg_cursor.description]
 
-    # Fetch all records and convert to a DataFrame
-    df = pd.DataFrame(cursor.fetchall(), columns=columns)
+        # Fetch all records and convert to a DataFrame
+        df = pd.DataFrame(pg_cursor.fetchall(), columns=columns)
 
-    cursor.close()
-    conn.close()
+        pg_cursor.close()
 
-    return df
+        return df
+    finally:
+        if pg_conn:
+            release_connection(pg_conn)
 
 
 df = query_postgres_authors()
+pprint_df(df)
+
+
+def query_postgres_works():
+    """Fetches up to 100 works from PostgreSQL and returns a DataFrame."""
+    pg_conn = None
+    try:
+        pg_conn = get_connection()
+        pg_cursor = pg_conn.cursor()
+
+        pg_cursor.execute("SELECT * FROM works LIMIT 100;")
+
+        if not pg_cursor.description:
+            raise ValueError("No data found in the table.")
+
+        # Get column names from the cursor description
+        columns = [desc[0] for desc in pg_cursor.description]
+
+        # Fetch all records and convert to a DataFrame
+        df = pd.DataFrame(pg_cursor.fetchall(), columns=columns)
+
+        pg_cursor.close()
+
+        return df
+    finally:
+        if pg_conn:
+            release_connection(pg_conn)
+
+
+df = query_postgres_works()
+pprint_df(df)
+
+
+def query_postgres_work_authors():
+    """Fetches up to 100 work_authors from PostgreSQL and returns a DataFrame."""
+    pg_conn = None
+    try:
+        pg_conn = get_connection()
+        pg_cursor = pg_conn.cursor()
+
+        pg_cursor.execute("SELECT * FROM work_authors LIMIT 100;")
+
+        if not pg_cursor.description:
+            raise ValueError("No data found in the table.")
+
+        # Get column names from the cursor description
+        columns = [desc[0] for desc in pg_cursor.description]
+
+        # Fetch all records and convert to a DataFrame
+        df = pd.DataFrame(pg_cursor.fetchall(), columns=columns)
+
+        pg_cursor.close()
+
+        return df
+    finally:
+        if pg_conn:
+            release_connection(pg_conn)
+
+
+df = query_postgres_work_authors()
 pprint_df(df)
 
 
