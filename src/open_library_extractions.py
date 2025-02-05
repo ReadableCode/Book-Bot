@@ -6,17 +6,13 @@ import gzip
 import json
 import os
 import shutil
-import sqlite3
 
 import pandas as pd
 import psycopg2
-import requests
 from dotenv import load_dotenv
+from psycopg2 import pool
 
 from utils.display_tools import pprint_df, pprint_dict, pprint_ls  # noqa
-
-# from psycopg2 import pool
-
 
 # %%
 # Variables #
@@ -48,26 +44,26 @@ POSTGRES_PORT = os.getenv("POSTGRES_PORT")
 # Connect To Postgres #
 
 
-# # Initialize the connection pool (adjust minconn and maxconn as needed)
-# POSTGRES_POOL = psycopg2.pool.SimpleConnectionPool(
-#     minconn=1,
-#     maxconn=5,  # Limit connections to avoid resource waste
-#     host=POSTGRES_URL,
-#     user=POSTGRES_USER,
-#     password=POSTGRES_PASSWORD,
-#     dbname=POSTGRES_DB,
-#     port=POSTGRES_PORT,
-# )
+# Initialize the connection pool (adjust minconn and maxconn as needed)
+POSTGRES_POOL = psycopg2.pool.SimpleConnectionPool(
+    minconn=1,
+    maxconn=5,  # Limit connections to avoid resource waste
+    host=POSTGRES_URL,
+    user=POSTGRES_USER,
+    password=POSTGRES_PASSWORD,
+    dbname=POSTGRES_DB,
+    port=POSTGRES_PORT,
+)
 
 
-# def get_connection():
-#     """Get a connection from the pool."""
-#     return POSTGRES_POOL.getconn()
+def get_connection():
+    """Get a connection from the pool."""
+    return POSTGRES_POOL.getconn()
 
 
-# def release_connection(conn):
-#     """Release a connection back to the pool."""
-#     POSTGRES_POOL.putconn(conn)
+def release_connection(conn):
+    """Release a connection back to the pool."""
+    POSTGRES_POOL.putconn(conn)
 
 
 # %%
@@ -77,14 +73,7 @@ POSTGRES_PORT = os.getenv("POSTGRES_PORT")
 def create_and_test_table():
     """Creates a books table in book_bot DB and inserts a test record."""
 
-    # Connect to the database
-    pg_conn = psycopg2.connect(
-        host=POSTGRES_URL,
-        user=POSTGRES_USER,
-        password=POSTGRES_PASSWORD,
-        dbname=POSTGRES_DB,
-        port=POSTGRES_PORT,
-    )
+    pg_conn = get_connection()
     pg_cursor = pg_conn.cursor()
 
     # Create authors table
@@ -218,14 +207,8 @@ works_text_file_path = get_works_text_file_path()
 def load_db_authors_postgres(authors_text_file_path, max_rows_to_read=None):
     row_counter = 0
 
-    conn = psycopg2.connect(
-        host=POSTGRES_URL,
-        user=POSTGRES_USER,
-        password=POSTGRES_PASSWORD,
-        dbname=POSTGRES_DB,
-        port=POSTGRES_PORT,
-    )
-    cursor = conn.cursor()
+    pg_conn = get_connection()
+    pg_cursor = pg_conn.cursor()
 
     # read the first few lines of the text file
     with open(authors_text_file_path, "r") as f:
@@ -293,7 +276,7 @@ def load_db_authors_postgres(authors_text_file_path, max_rows_to_read=None):
                 created = EXCLUDED.created
             """
 
-            cursor.execute(
+            pg_cursor.execute(
                 query,
                 (
                     line_key,
@@ -315,12 +298,12 @@ def load_db_authors_postgres(authors_text_file_path, max_rows_to_read=None):
                 print(f"Authors row count: {row_counter}")
             if row_counter % 10000 == 0:
                 print("Committing")
-                conn.commit()
+                pg_conn.commit()
             if max_rows_to_read and row_counter >= max_rows_to_read:
                 break
 
-        conn.commit()
-        cursor.close()
+        pg_conn.commit()
+        pg_cursor.close()
 
         print("Authors row count updated: ", row_counter)
 
