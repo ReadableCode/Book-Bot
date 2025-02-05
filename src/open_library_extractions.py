@@ -8,9 +8,9 @@ import os
 import shutil
 
 import pandas as pd
-import psycopg2
 from dotenv import load_dotenv
 from psycopg2 import pool
+from tqdm import tqdm
 
 from utils.display_tools import pprint_df, pprint_dict, pprint_ls  # noqa
 
@@ -24,7 +24,8 @@ print(book_data_dir)
 
 verbose = False
 data_dumps_url = "https://openlibrary.org/developers/dumps"
-
+COMMIT_EVERY_ROW_NUM = 100000
+MAX_ROWS_TO_READ = None  # Set to None to read all rows
 
 # %%
 # Credentials #
@@ -210,6 +211,16 @@ def get_works_text_file_path():
 authors_text_file_path = get_authors_text_file_path()
 works_text_file_path = get_works_text_file_path()
 
+
+def count_lines(file_path):
+    """Fast way to count total lines in a file."""
+    with open(file_path, "r", encoding="utf-8") as f:
+        num_lines = sum(1 for _ in f)
+
+    print(f"Total lines in {file_path}: {num_lines}")
+    return num_lines
+
+
 # %%
 # Book Data: Authors #
 
@@ -218,26 +229,25 @@ def load_db_authors_postgres(authors_text_file_path, max_rows_to_read=None):
     row_counter = 0
     pg_conn = None
     pg_cursor = None
+
+    total_lines = count_lines(authors_text_file_path)
+    if max_rows_to_read:
+        total_lines = min(total_lines, max_rows_to_read)
+
     try:
         pg_conn = get_connection()
         pg_cursor = pg_conn.cursor()
 
         # read the first few lines of the text file
         with open(authors_text_file_path, "r") as f:
-            for line in f:
+            for line in tqdm(f, total=total_lines, desc="Processing Authors"):
                 line = line.strip()
                 if not line:
                     continue
-                # The file is tab-separated. The columns are:
-                # 0: Type (/type/author)
-                # 1: Author key (e.g. /authors/OL10000278A)
-                # 2: Revision number (e.g. 3)
-                # 3: Timestamp (e.g. 2021-12-26T21:22:34.663256)
-                # 4: JSON blob with the record details
+
                 parts = line.split("\t")
 
                 if len(parts) < 5:
-                    # Skip lines that don't have enough columns.
                     break
 
                 line_type = parts[0]
@@ -306,10 +316,7 @@ def load_db_authors_postgres(authors_text_file_path, max_rows_to_read=None):
                     print(query)
 
                 row_counter += 1
-                if row_counter % 10000 == 0:
-                    print(f"Authors row count: {row_counter}")
-                if row_counter % 10000 == 0:
-                    print("Committing")
+                if row_counter % COMMIT_EVERY_ROW_NUM == 0:
                     pg_conn.commit()
                 if max_rows_to_read and row_counter >= max_rows_to_read:
                     break
@@ -324,10 +331,8 @@ def load_db_authors_postgres(authors_text_file_path, max_rows_to_read=None):
             release_connection(pg_conn)
 
 
-verbose = True
 authors_text_file_path = get_authors_text_file_path()
-max_rows_to_read = 100000
-load_db_authors_postgres(authors_text_file_path, max_rows_to_read=max_rows_to_read)
+load_db_authors_postgres(authors_text_file_path, max_rows_to_read=MAX_ROWS_TO_READ)
 
 
 # %%
@@ -338,13 +343,18 @@ def load_db_works_postgres(works_text_file_path, max_rows_to_read=None, verbose=
     row_counter = 0
     pg_conn = None
     pg_cursor = None
+
+    total_lines = count_lines(works_text_file_path)
+    if max_rows_to_read:
+        total_lines = min(total_lines, max_rows_to_read)
+
     try:
         pg_conn = get_connection()
         pg_cursor = pg_conn.cursor()
 
         # Read the first few lines of the text file
         with open(works_text_file_path, "r") as f:
-            for line in f:
+            for line in tqdm(f, total=total_lines, desc="Processing Works"):
                 line = line.strip()
                 if not line:
                     continue
@@ -354,7 +364,7 @@ def load_db_works_postgres(works_text_file_path, max_rows_to_read=None, verbose=
                     break
 
                 line_type = parts[0]
-                line_key = parts[1]  # work_key
+                line_key = parts[1]
                 line_revision = parts[2]
                 line_last_modified = parts[3]
                 line_json_blob = parts[4]
@@ -379,7 +389,7 @@ def load_db_works_postgres(works_text_file_path, max_rows_to_read=None, verbose=
                 latest_revision = record.get("latest_revision", "")
                 authors_list = record.get("authors", [])
 
-                # ✅ Step 1: Ensure authors exist before inserting into `work_authors`
+                # Ensure authors exist before inserting into `work_authors`
                 for author in authors_list:
                     author_key = (
                         author.get("author", {}).get("key")
@@ -396,7 +406,7 @@ def load_db_works_postgres(works_text_file_path, max_rows_to_read=None, verbose=
                             (author_key,),
                         )
 
-                # ✅ Step 2: Insert work into `works`
+                # Insert work into `works`
                 pg_cursor.execute(
                     """
                     INSERT INTO works (
@@ -426,7 +436,7 @@ def load_db_works_postgres(works_text_file_path, max_rows_to_read=None, verbose=
                     ),
                 )
 
-                # ✅ Step 3: Insert relationships into `work_authors`
+                # Insert relationships into `work_authors`
                 for author in authors_list:
                     author_key = (
                         author.get("author", {}).get("key")
@@ -444,9 +454,7 @@ def load_db_works_postgres(works_text_file_path, max_rows_to_read=None, verbose=
                         )
 
                 row_counter += 1
-                if row_counter % 1000 == 0:
-                    print(f"Works row count: {row_counter}")
-                if row_counter % 10000 == 0:
+                if row_counter % COMMIT_EVERY_ROW_NUM == 0:
                     pg_conn.commit()
 
                 if max_rows_to_read and row_counter >= max_rows_to_read:
@@ -462,23 +470,21 @@ def load_db_works_postgres(works_text_file_path, max_rows_to_read=None, verbose=
             release_connection(pg_conn)
 
 
-verbose = True
 works_text_file_path = get_works_text_file_path()
-max_rows_to_read = 10
-load_db_works_postgres(works_text_file_path, max_rows_to_read=max_rows_to_read)
+load_db_works_postgres(works_text_file_path, max_rows_to_read=MAX_ROWS_TO_READ)
 
 
 # %%
 
 
 def query_postgres_authors():
-    """Fetches up to 100 authors from PostgreSQL and returns a DataFrame."""
+    """Fetches up to 10 authors from PostgreSQL and returns a DataFrame."""
     pg_conn = None
     try:
         pg_conn = get_connection()
         pg_cursor = pg_conn.cursor()
 
-        pg_cursor.execute("SELECT * FROM authors LIMIT 100;")
+        pg_cursor.execute("SELECT * FROM authors LIMIT 10;")
 
         if not pg_cursor.description:
             raise ValueError("No data found in the table.")
@@ -495,20 +501,16 @@ def query_postgres_authors():
     finally:
         if pg_conn:
             release_connection(pg_conn)
-
-
-df = query_postgres_authors()
-pprint_df(df)
 
 
 def query_postgres_works():
-    """Fetches up to 100 works from PostgreSQL and returns a DataFrame."""
+    """Fetches up to 10 works from PostgreSQL and returns a DataFrame."""
     pg_conn = None
     try:
         pg_conn = get_connection()
         pg_cursor = pg_conn.cursor()
 
-        pg_cursor.execute("SELECT * FROM works LIMIT 100;")
+        pg_cursor.execute("SELECT * FROM works LIMIT 10;")
 
         if not pg_cursor.description:
             raise ValueError("No data found in the table.")
@@ -525,20 +527,16 @@ def query_postgres_works():
     finally:
         if pg_conn:
             release_connection(pg_conn)
-
-
-df = query_postgres_works()
-pprint_df(df)
 
 
 def query_postgres_work_authors():
-    """Fetches up to 100 work_authors from PostgreSQL and returns a DataFrame."""
+    """Fetches up to 10 work_authors from PostgreSQL and returns a DataFrame."""
     pg_conn = None
     try:
         pg_conn = get_connection()
         pg_cursor = pg_conn.cursor()
 
-        pg_cursor.execute("SELECT * FROM work_authors LIMIT 100;")
+        pg_cursor.execute("SELECT * FROM work_authors LIMIT 10;")
 
         if not pg_cursor.description:
             raise ValueError("No data found in the table.")
@@ -557,8 +555,21 @@ def query_postgres_work_authors():
             release_connection(pg_conn)
 
 
-df = query_postgres_work_authors()
-pprint_df(df)
+# %%
+# Main #
 
+if __name__ == "__main__":
+
+    df = query_postgres_authors()
+    print("Authors:")
+    pprint_df(df)
+
+    df = query_postgres_works()
+    print("Works:")
+    pprint_df(df)
+
+    df = query_postgres_work_authors()
+    print("Work Authors:")
+    pprint_df(df)
 
 # %%
