@@ -4,7 +4,7 @@
 import json
 import os
 
-
+import pandas as pd
 from dotenv import load_dotenv
 from psycopg2 import pool
 from tqdm import tqdm
@@ -118,6 +118,37 @@ def ensure_postgres_tables():
     pg_conn.close()
 
     print("Tables ensured.")
+
+
+# %%
+# Queries #
+
+
+def query_postgres(query):
+    """Executes a given SQL query and returns a Pandas DataFrame."""
+    pg_conn = None
+    pg_cursor = None
+    try:
+        pg_conn = get_connection()
+        pg_cursor = pg_conn.cursor()
+
+        pg_cursor.execute(query)
+
+        if not pg_cursor.description:
+            raise ValueError("No data found or invalid query.")
+
+        # Get column names
+        columns = [desc[0] for desc in pg_cursor.description]
+
+        # Convert result to DataFrame
+        df = pd.DataFrame(pg_cursor.fetchall(), columns=columns)
+
+        return df
+    finally:
+        if pg_cursor:
+            pg_cursor.close()
+        if pg_conn:
+            release_connection(pg_conn)
 
 
 # %%
@@ -377,3 +408,5 @@ def load_db_works_postgres(works_text_file_path, max_rows_to_read=None, verbose=
         if pg_conn:
             release_connection(pg_conn)
 
+
+# %%
