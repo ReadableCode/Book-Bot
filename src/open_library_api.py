@@ -84,6 +84,11 @@ if __name__ == "__main__":
         print("-----------------")
         pprint_dict(item)
 
+
+# %%
+# Main #
+
+if __name__ == "__main__":
     isbn = "9781599909875"
     book_info = get_book_info_by_isbn(isbn)
     if book_info:
