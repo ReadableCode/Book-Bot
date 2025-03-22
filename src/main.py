@@ -45,6 +45,7 @@ def get_authors_from_string_parts(search_string):
 
 search_string = "orson scott card"
 # search_string = "Orson Scott Card"
+search_string = "Jack Reacher"
 
 df_authors = get_authors_from_string_parts(search_string)
 
@@ -113,6 +114,12 @@ df_results = get_books_with_authors_by_title(search_string)
 
 print("Books and Their Authors:")
 pprint_df(df_results)
+
+
+# %%
+
+
+# get books by author
 
 
 # %%
