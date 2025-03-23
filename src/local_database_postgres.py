@@ -20,6 +20,8 @@ verbose = False
 
 COMMIT_EVERY_ROW_NUM = 100000
 
+dict_vars: dict[str, list[str]] = {}
+
 
 # %%
 # Credentials #
@@ -149,6 +151,65 @@ def query_postgres(query):
             pg_cursor.close()
         if pg_conn:
             release_connection(pg_conn)
+
+
+def get_authors_list():
+    """
+    Get a list of all authors
+    """
+    key = "list_authors"
+    if key in dict_vars:
+        return dict_vars[key].copy()
+
+    print("Buillding list of authors...")
+    # get a list of all unique author names from table
+    query = """
+    SELECT DISTINCT LOWER(name) AS name, LENGTH(LOWER(name)) AS name_len
+    FROM authors
+    ORDER BY name_len DESC
+    """
+
+    df_authors = query_postgres(query)
+    # fillna
+    df_authors = df_authors.fillna("")
+    ls_authors = df_authors["name"].tolist()
+
+    dict_vars[key] = ls_authors.copy()
+
+    return ls_authors
+
+
+def get_series_by_author(author_name):
+    """
+    Fetches all works by a given author where the title contains a slash (/), indicating a series.
+    """
+    query = f"""
+    SELECT w.work_key, w.title
+    FROM works w
+    JOIN work_authors wa ON w.work_key = wa.work_key
+    JOIN authors a ON wa.author_key = a.author_key
+    WHERE a.name ILIKE '%{author_name}%' AND w.title LIKE '%/%'
+    ORDER BY w.title;
+    """
+    df = query_postgres(query)
+    return df["title"].tolist()
+
+
+def get_books_by_author(author_name):
+    """
+    Fetches all unique books by a given author.
+    """
+    query = f"""
+    SELECT DISTINCT w.title
+    FROM works w
+    JOIN work_authors wa ON w.work_key = wa.work_key
+    JOIN authors a ON wa.author_key = a.author_key
+    WHERE a.name ILIKE '%{author_name}%'
+    ORDER BY w.title;
+    """
+
+    df = query_postgres(query)
+    return df["title"].tolist()
 
 
 # %%

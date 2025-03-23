@@ -3,7 +3,11 @@
 
 import os
 
-from local_database_postgres import query_postgres
+from local_database_postgres import (
+    get_authors_list,
+    get_books_by_author,
+    get_series_by_author,
+)
 from utils.display_tools import pprint_df, pprint_dict, pprint_ls  # noqa
 
 # %%
@@ -11,19 +15,27 @@ from utils.display_tools import pprint_df, pprint_dict, pprint_ls  # noqa
 
 
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-local_books_dir = os.path.join("Z:\\", "Books")
+
+ls_possible_book_dirs = [
+    os.path.join("Y:\\", "Books"),
+    os.path.join("U:\\", "Books"),
+]
+
+
+for book_dir in ls_possible_book_dirs:
+    if os.path.isdir(os.path.join(book_dir, "Calibre-library")):
+        local_books_dir = os.path.join(book_dir, "Calibre-library")
+        break
+else:
+    raise FileNotFoundError("Books directory not found.")
+
 print(local_books_dir)
 
-# list dir
-ls_books = os.listdir(local_books_dir)
-
-dict_vars = {}
-
-ls_blocked_authors = [
+ls_remove_non_authors = [
     "",
     "Jack Reacher",
 ]
-ls_blocked_authors = [auth.lower() for auth in ls_blocked_authors]
+ls_remove_non_authors = [auth.lower() for auth in ls_remove_non_authors]
 
 
 # %%
@@ -37,57 +49,6 @@ C:.
 │   │   ├───Book Title
 │   │   └───Book Title
 """
-
-# %%
-# List Builders #
-
-
-def get_authors_list():
-    """
-    Get a list of all authors
-    """
-    key = "list_authors"
-    if key in dict_vars:
-        return dict_vars[key].copy()
-
-    print("Buillding list of authors...")
-    # get a list of all unique author names from table
-    query = """
-    SELECT DISTINCT LOWER(name) AS name, LENGTH(LOWER(name)) AS name_len
-    FROM authors
-    ORDER BY name_len DESC
-    """
-
-    df_authors = query_postgres(query)
-    # fillna
-    df_authors = df_authors.fillna("")
-    ls_authors = df_authors["name"].tolist()
-
-    dict_vars[key] = ls_authors.copy()
-
-    return ls_authors
-
-
-def get_books_by_author(author_name):
-    """
-    Fetches all books by a given author.
-    """
-    query = f"""
-    SELECT w.work_key, w.title
-    FROM works w
-    JOIN work_authors wa
-    ON w.work_key = wa.work_key
-    JOIN authors a
-    ON wa.author_key = a.author_key
-    WHERE a.name ILIKE '%{author_name}%'
-    ORDER BY w.title;
-    """
-
-    df = query_postgres(query)
-
-    list_books_by_author = df["title"].tolist()
-
-    return list_books_by_author
 
 
 # %%
@@ -110,7 +71,7 @@ def get_author_from_path(path):
     for auth in ls_authors:
         if len(auth) < 8:
             continue
-        if auth in ls_blocked_authors:
+        if auth in ls_remove_non_authors:
             continue
         if auth in path.lower():
             author = auth.title()
@@ -130,7 +91,7 @@ def get_metadata_from_path(path):
 
     file_extension = linux_rel_path.split(".")[-1]
     print(f"Checking file type: {file_extension}")
-    if file_extension not in ["pdf", "epub", "mobi"]:
+    if file_extension not in ["pdf", "epub", "mobi", "azw3", "opf"]:
         print(f"Invalid file type: {file_extension}")
         return {}
 
@@ -153,7 +114,6 @@ def get_metadata_from_path(path):
         print(f"Title not found in path: {linux_rel_path}")
         return {}
 
-    # convert to dictionary
     dict_meta_data = {
         "path": linux_rel_path,
         "author": author,
@@ -166,10 +126,32 @@ def get_metadata_from_path(path):
 
 
 # %%
+
+
+author_name = "Sarah J. Maas"
+ls_series_by_author = get_series_by_author(author_name)
+
+pprint_ls(ls_series_by_author)
+
+# %%
+
+author_name = "Sarah J. Maas"
+author_name = "orson scott card"
+books_by_author = get_books_by_author(author_name)
+
+pprint_ls(books_by_author)
+
+
+# %%
+test_path = "Sarah J. Maas/A Court of Frost and Starlight (A Court of Thorns and Roses) (799)/A Court of Frost and Starlight (A Court of - Sarah J. Maas.epub"
+
+print(get_metadata_from_path(test_path))
+
+
+# %%
 # Main #
 
 if __name__ == "__main__":
-    # Walk recursively and get first matching path
     for root, dirs, files in os.walk(local_books_dir):
         if root == local_books_dir and "Calibre-library" in dirs:
             dirs.remove("Calibre-library")
