@@ -131,7 +131,9 @@ def get_metadata_from_path(path):
 author_name = "Sarah J. Maas"
 ls_series_by_author = get_series_by_author(author_name)
 
+print(f"Series by {author_name}:")
 pprint_ls(ls_series_by_author)
+
 
 # %%
 
@@ -139,23 +141,33 @@ author_name = "Sarah J. Maas"
 author_name = "orson scott card"
 books_by_author = get_books_by_author(author_name)
 
+print(f"Books by {author_name}:")
 pprint_ls(books_by_author)
 
 
 # %%
+
+
 test_path = "Sarah J. Maas/A Court of Frost and Starlight (A Court of Thorns and Roses) (799)/A Court of Frost and Starlight (A Court of - Sarah J. Maas.epub"
 
+print(f"Getting metadata from path: {test_path}")
 print(get_metadata_from_path(test_path))
 
 
 # %%
 # Main #
 
+ls_skip_dirs = [
+    "Calibre-library",
+    "Calibre-books",
+]
+
 if __name__ == "__main__":
     for root, dirs, files in os.walk(local_books_dir):
-        if root == local_books_dir and "Calibre-library" in dirs:
-            dirs.remove("Calibre-library")
+        if os.path.normpath(root) == os.path.normpath(local_books_dir):
+            dirs[:] = [d for d in dirs if d not in ls_skip_dirs]
 
+        print(f"Checking root: {root}")
         if files:
             rel_path = os.path.relpath(os.path.join(root, files[0]), local_books_dir)
             dict_book_metadata = get_metadata_from_path(rel_path)
