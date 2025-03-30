@@ -33,10 +33,12 @@ def query_ai_for_book_metadata(current_book_path: str) -> str:
         title
 
     The author should be the full name of the author, including middle names.
-    The series should be the full name of the series, including the word "Series" and the number.
-    The series number should be the number of the book in the series, including leading zeros.
+    The series should be the full name of the series, including the word "Series" but no numbers.
+    The series number should be the number of the book in the series.
     The book title should be the full title of the book, including the subtitle.
     The dictionary should be formatted as a single line of json.
+    
+    The JSON should all be on the same line with not breaking characters in between at all, do not mess this up or it will break everything.
     """  # noqa: E501
 
     response = requests.post(
@@ -59,6 +61,31 @@ def query_ai_for_book_metadata(current_book_path: str) -> str:
     print("=========================")
 
     return output
+
+
+def extract_json_from_ai_output(output: str) -> dict:
+    for i, line in enumerate(output.splitlines(), 1):
+        line = line.strip()
+        print(f"Line {i:02} being checked: {repr(line)}")
+
+        if "`" in line or "{" not in line or "}" not in line:
+            continue
+
+        # Remove wrapping quotes if present
+        if (line.startswith("'") and line.endswith("'")) or (line.startswith('"') and line.endswith('"')):
+            line = line[1:-1]
+
+        # Unescape escaped quotes if needed
+        line = line.replace('\\"', '"')
+
+        try:
+            parsed = json.loads(line)
+            print(f"✅ Successfully parsed JSON on line {i:02}: {parsed}")
+            return parsed
+        except json.JSONDecodeError:
+            print(f"❌ Failed to parse JSON on line {i:02}: {repr(line)}")
+
+    raise json.JSONDecodeError("No valid JSON found", output, 0)
 
 
 

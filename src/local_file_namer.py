@@ -9,7 +9,7 @@ from local_database_postgres import (
     get_series_by_author,
 )
 from utils.display_tools import pprint_df, pprint_dict, pprint_ls  # noqa
-from ai_helper import query_ai_for_book_metadata
+from ai_helper import query_ai_for_book_metadata, extract_json_from_ai_output
 
 # %%
 # Constants #
@@ -32,7 +32,7 @@ LS_INVALID_ATHORS_IN_DATABASE = [
     "Jack Reacher",
 ]
 
-DESIRED_FOLDER_STRUCT_W_SERIES = "{author}/{series}/{series_numer} - {book_title}"
+DESIRED_FOLDER_STRUCT_W_SERIES = "{author}/{series}/{series_number} - {book_title}"
 DESIRED_FOLDER_STRUCT_WO_SERIES = "{author}/{book_title}"
 
 
@@ -53,7 +53,47 @@ LS_INVALID_ATHORS_IN_DATABASE = [auth.lower() for auth in LS_INVALID_ATHORS_IN_D
 
 
 # %%
-# Functions #
+# Functions: Files #
+
+def get_desired_path_for_book(dict_meta_data, extension):
+    """
+    Get the desired path for a book.
+    """
+    author = dict_meta_data.get("author", "")
+    series = dict_meta_data.get("series", "")
+    series_number = dict_meta_data.get("series_number", "")
+    title = dict_meta_data.get("title", "")
+    
+    # series number to 2 digit padded string
+    if series_number != "":
+        series_number = str(int(series_number)).zfill(2)
+
+    if series:
+        return [
+            author,
+            series,
+            f"{series_number} - {title}",
+        ]
+    else:
+        return [
+            author,
+            title
+        ]
+
+
+# test_book_dict = {
+#   "author": "Sarah J. Maas",
+#   "series": "A Court of Thorns and Roses Series",
+#   "series_number": "3",
+#   "title": "A Court of Frost and Starlight"
+# }
+# extension = "epub"
+
+# pprint_ls(get_desired_path_for_book(test_book_dict, extension))
+
+
+# %%
+# Functions: Metadata #
 
 
 def check_if_valid_book(dict_meta_data):
@@ -98,9 +138,10 @@ def get_metadata_from_path(path, use_ai=True):
     
     if use_ai:
         # Use AI to get the metadata
-        dict_meta_data = get_book_details_ai(
+        ai_book_details = query_ai_for_book_metadata(
             linux_rel_path,
         )
+        dict_meta_data = extract_json_from_ai_output(ai_book_details)
         author = dict_meta_data.get("author", "")
         if author == "":
             print("Author not found.")
@@ -145,6 +186,7 @@ def get_metadata_from_path(path, use_ai=True):
         "path": linux_rel_path,
         "author": author,
         "series": series,
+        "series_number": series_number,
         "title": title,
         "file_type": file_extension,
     }
@@ -175,49 +217,28 @@ def get_metadata_from_path(path, use_ai=True):
 # %%
 
 
-test_path = "Sarah J. Maas/A Court of Frost and Starlight (A Court of Thorns and Roses) (799)/A Court of Frost and Starlight (A Court of - Sarah J. Maas.epub"
+# test_path = "Sarah J. Maas/A Court of Frost and Starlight (A Court of Thorns and Roses) (799)/A Court of Frost and Starlight (A Court of - Sarah J. Maas.epub"
 
-print(f"Getting metadata from path: {test_path}")
-ai_response: str = query_ai_for_book_metadata(test_path)
-print("AI response:")
-
-
-# %%
+# print(f"Getting metadata from path: {test_path}")
+# ai_response: str = query_ai_for_book_metadata(test_path)
+# print("AI response:")
 
 
-print("==== AI RAW RESPONSE ====")
-for i, line in enumerate(ai_response.splitlines(), 1):
-    print(f"{i:02}: {line}")
-print("=========================")
+# # %%
 
 
-# %%
+# print("==== AI RAW RESPONSE ====")
+# for i, line in enumerate(ai_response.splitlines(), 1):
+#     print(f"{i:02}: {line}")
+# print("=========================")
 
 
-def extract_json_from_ai_output(output: str) -> dict:
-    for i, line in enumerate(output.splitlines(), 1):
-        line = line.strip()
-        print(f"Line {i:02} being checked: {repr(line)}")
+# # %%
 
-        # Ignore lines with backticks or not starting with a JSON-like line
-        if "`" in line or not line.startswith("{"):
-            continue
 
-        # Handle JSON wrapped in quotes (AI sometimes returns single or double quoted strings)
-        if (line.startswith("'") or line.startswith('"')) and line.endswith(("'", '"')):
-            line = line[1:-1]
 
-        try:
-            parsed = json.loads(line)
-            print(f"✅ Successfully parsed JSON on line {i:02}: {parsed}")
-            return parsed
-        except json.JSONDecodeError as e:
-            print(f"❌ Failed to parse JSON on line {i:02}: {repr(line)}")
-
-    raise json.JSONDecodeError("No valid JSON found", output, 0)
-
-print("Extracting JSON from AI output")
-pprint_dict(extract_json_from_ai_output(ai_response))
+# print("Extracting JSON from AI output")
+# pprint_dict(extract_json_from_ai_output(ai_response))
 
 # %%
 # Main #
@@ -228,6 +249,9 @@ ls_skip_dirs = [
 ]
 
 if __name__ == "__main__":
+    max_files_to_do = 5
+    files_done = 0
+
     for root, dirs, files in os.walk(local_books_dir):
         # Skip this root entirely if it's a skip folder
         if os.path.basename(os.path.normpath(root)) in ls_skip_dirs:
@@ -235,17 +259,25 @@ if __name__ == "__main__":
 
         dirs[:] = [d for d in dirs if d not in ls_skip_dirs]
 
-        print(f"Checking root: {root}")
         if files:
             rel_path = os.path.relpath(os.path.join(root, files[0]), local_books_dir)
+            print("-" * 100)
             print(f"Checking file: {rel_path}")
-            break
             dict_book_metadata = get_metadata_from_path(rel_path)
             valid_book = check_if_valid_book(dict_book_metadata)
 
             if valid_book:
                 pprint_dict(dict_book_metadata)
-                break
+                ls_path_desired = get_desired_path_for_book(
+                    dict_book_metadata,
+                    rel_path.split(".")[-1],
+                )
+                print("Would move book to:")
+                pprint_ls(ls_path_desired)
+                print()
+                files_done += 1
+                if files_done >= max_files_to_do:
+                    break
 
 
 # %%
