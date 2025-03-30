@@ -11,44 +11,44 @@ from local_database_postgres import (
 from utils.display_tools import pprint_df, pprint_dict, pprint_ls  # noqa
 
 # %%
-# Variables #
+# Constants #
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# %%
+# Settings #
 
-ls_possible_book_dirs = [
+
+PATH_LIST_POSSIBLE_MEDIA_LOCS = [
     os.path.join("Y:\\", "Books"),
     os.path.join("U:\\", "Books"),
 ]
 
 
-for book_dir in ls_possible_book_dirs:
+LS_INVALID_ATHORS_IN_DATABASE = [
+    "",
+    "Jack Reacher",
+]
+
+DESIRED_FOLDER_STRUCT_W_SERIES = "{author}/{series}/{series_numer} - {book_title}"
+DESIRED_FOLDER_STRUCT_WO_SERIES = "{author}/{book_title}"
+
+
+# %%
+# Calculated Variables #
+
+
+for book_dir in PATH_LIST_POSSIBLE_MEDIA_LOCS:
     if os.path.isdir(os.path.join(book_dir, "Calibre-library")):
-        local_books_dir = os.path.join(book_dir, "Calibre-library")
+        local_books_dir = book_dir
         break
 else:
     raise FileNotFoundError("Books directory not found.")
 
 print(local_books_dir)
 
-ls_remove_non_authors = [
-    "",
-    "Jack Reacher",
-]
-ls_remove_non_authors = [auth.lower() for auth in ls_remove_non_authors]
-
-
-# %%
-# Folder Structure #
-
-
-"""
-C:.
-├───Author
-│   ├───Series ( if any )
-│   │   ├───Book Title
-│   │   └───Book Title
-"""
+LS_INVALID_ATHORS_IN_DATABASE = [auth.lower() for auth in LS_INVALID_ATHORS_IN_DATABASE]
 
 
 # %%
@@ -71,7 +71,7 @@ def get_author_from_path(path):
     for auth in ls_authors:
         if len(auth) < 8:
             continue
-        if auth in ls_remove_non_authors:
+        if auth in LS_INVALID_ATHORS_IN_DATABASE:
             continue
         if auth in path.lower():
             author = auth.title()
@@ -164,12 +164,17 @@ ls_skip_dirs = [
 
 if __name__ == "__main__":
     for root, dirs, files in os.walk(local_books_dir):
-        if os.path.normpath(root) == os.path.normpath(local_books_dir):
-            dirs[:] = [d for d in dirs if d not in ls_skip_dirs]
+        # Skip this root entirely if it's a skip folder
+        if os.path.basename(os.path.normpath(root)) in ls_skip_dirs:
+            continue
+
+        dirs[:] = [d for d in dirs if d not in ls_skip_dirs]
 
         print(f"Checking root: {root}")
         if files:
             rel_path = os.path.relpath(os.path.join(root, files[0]), local_books_dir)
+            print(f"Checking file: {rel_path}")
+            break
             dict_book_metadata = get_metadata_from_path(rel_path)
             valid_book = check_if_valid_book(dict_book_metadata)
 
