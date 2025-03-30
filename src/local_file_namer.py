@@ -2,13 +2,14 @@
 # Imports #
 
 import os
-
+import json
 from local_database_postgres import (
     get_authors_list,
     get_books_by_author,
     get_series_by_author,
 )
 from utils.display_tools import pprint_df, pprint_dict, pprint_ls  # noqa
+from ai_helper import query_ai_for_book_metadata
 
 # %%
 # Constants #
@@ -82,7 +83,7 @@ def get_author_from_path(path):
     return ""
 
 
-def get_metadata_from_path(path):
+def get_metadata_from_path(path, use_ai=True):
     """
     Get the parts of a path.
     """
@@ -94,25 +95,51 @@ def get_metadata_from_path(path):
     if file_extension not in ["pdf", "epub", "mobi", "azw3", "opf"]:
         print(f"Invalid file type: {file_extension}")
         return {}
+    
+    if use_ai:
+        # Use AI to get the metadata
+        dict_meta_data = get_book_details_ai(
+            linux_rel_path,
+        )
+        author = dict_meta_data.get("author", "")
+        if author == "":
+            print("Author not found.")
+            return {}
+        author = author.title()
+        title = dict_meta_data.get("title", "")
+        if title == "":
+            print("Title not found.")
+            return {}
+        series = dict_meta_data.get("series", "")
+        series = series.title()
+        series_number = dict_meta_data.get("series_number", "")
 
-    author = get_author_from_path(linux_rel_path)
-    if author == "":
-        return {}
+        title = title.title()
+        print(f"Found author: {author}")
+        print(f"Found title: {title}")
+        print(f"Found series: {series}")
+        print(f"Found series number: {series_number}")
 
-    ls_titles_by_author = list(set(get_books_by_author(author)))
-    print(f"Titles by {author}:")
-    pprint_ls(ls_titles_by_author)
-
-    series = ""
-    title = ""
-
-    for title in ls_titles_by_author:
-        if title.lower() in linux_rel_path.lower():
-            print(f"Found title: {title}")
-            break
     else:
-        print(f"Title not found in path: {linux_rel_path}")
-        return {}
+        author = get_author_from_path(linux_rel_path)
+        if author == "":
+            return {}
+
+        ls_titles_by_author = list(set(get_books_by_author(author)))
+        print(f"Titles by {author}:")
+        pprint_ls(ls_titles_by_author)
+
+        series = ""
+        title = ""
+
+        for title in ls_titles_by_author:
+            if title.lower() in linux_rel_path.lower():
+                print(f"Found title: {title}")
+                break
+        else:
+            print(f"Title not found in path: {linux_rel_path}")
+            return {}
+        series_number = ""
 
     dict_meta_data = {
         "path": linux_rel_path,
@@ -128,21 +155,21 @@ def get_metadata_from_path(path):
 # %%
 
 
-author_name = "Sarah J. Maas"
-ls_series_by_author = get_series_by_author(author_name)
+# author_name = "Sarah J. Maas"
+# ls_series_by_author = get_series_by_author(author_name)
 
-print(f"Series by {author_name}:")
-pprint_ls(ls_series_by_author)
+# print(f"Series by {author_name}:")
+# pprint_ls(ls_series_by_author)
 
 
-# %%
+# # %%
 
-author_name = "Sarah J. Maas"
-author_name = "orson scott card"
-books_by_author = get_books_by_author(author_name)
+# author_name = "Sarah J. Maas"
+# author_name = "orson scott card"
+# books_by_author = get_books_by_author(author_name)
 
-print(f"Books by {author_name}:")
-pprint_ls(books_by_author)
+# print(f"Books by {author_name}:")
+# pprint_ls(books_by_author)
 
 
 # %%
@@ -151,8 +178,46 @@ pprint_ls(books_by_author)
 test_path = "Sarah J. Maas/A Court of Frost and Starlight (A Court of Thorns and Roses) (799)/A Court of Frost and Starlight (A Court of - Sarah J. Maas.epub"
 
 print(f"Getting metadata from path: {test_path}")
-print(get_metadata_from_path(test_path))
+ai_response: str = query_ai_for_book_metadata(test_path)
+print("AI response:")
 
+
+# %%
+
+
+print("==== AI RAW RESPONSE ====")
+for i, line in enumerate(ai_response.splitlines(), 1):
+    print(f"{i:02}: {line}")
+print("=========================")
+
+
+# %%
+
+
+def extract_json_from_ai_output(output: str) -> dict:
+    for i, line in enumerate(output.splitlines(), 1):
+        line = line.strip()
+        print(f"Line {i:02} being checked: {repr(line)}")
+
+        # Ignore lines with backticks or not starting with a JSON-like line
+        if "`" in line or not line.startswith("{"):
+            continue
+
+        # Handle JSON wrapped in quotes (AI sometimes returns single or double quoted strings)
+        if (line.startswith("'") or line.startswith('"')) and line.endswith(("'", '"')):
+            line = line[1:-1]
+
+        try:
+            parsed = json.loads(line)
+            print(f"✅ Successfully parsed JSON on line {i:02}: {parsed}")
+            return parsed
+        except json.JSONDecodeError as e:
+            print(f"❌ Failed to parse JSON on line {i:02}: {repr(line)}")
+
+    raise json.JSONDecodeError("No valid JSON found", output, 0)
+
+print("Extracting JSON from AI output")
+pprint_dict(extract_json_from_ai_output(ai_response))
 
 # %%
 # Main #
