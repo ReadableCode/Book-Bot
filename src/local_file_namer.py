@@ -8,6 +8,7 @@ from local_database_postgres import (
     get_books_by_author,
     get_series_by_author,
 )
+import re
 from utils.display_tools import pprint_df, pprint_dict, pprint_ls  # noqa
 from ai_helper import query_ai_for_book_metadata, extract_json_from_ai_output
 
@@ -59,6 +60,10 @@ PATH_OUTPUT = os.path.join(local_books_dir, "book_bot_output")
 # %%
 # Functions: Files #
 
+def sanitize_filename(path: str) -> str:
+    # Replace invalid Windows filename characters with underscore
+    return re.sub(r'[<>:"/\\|?*]', "_", path)
+
 def get_desired_path_for_book(dict_meta_data, extension):
     """
     Get the desired path for a book.
@@ -71,12 +76,19 @@ def get_desired_path_for_book(dict_meta_data, extension):
     # series number to 2 digit padded string
     if series_number != "":
         series_number = str(float(series_number)).zfill(2)
+    
+    # sanitize the title
+    title = sanitize_filename(title)
+    author = sanitize_filename(author)
+    series = sanitize_filename(series)
+    extension = sanitize_filename(extension)
 
     if series:
+        series_num_title_string = f"{series_number} - {title}.{extension}" if series_number else f"{title}.{extension}"
         return [
             author,
             series,
-            f"{series_number} - {title}.{extension}",
+            series_num_title_string,
         ]
     else:
         return [
@@ -273,7 +285,7 @@ def process_single_file_move_dict(dict_move):
         os.makedirs(os.path.dirname(new_path), exist_ok=True)
         # Create the stub json file
         with open(stub_json_path, "w") as f:
-            json.dump(book_metadata, f, indent=4)
+            json.dump(dict_move, f, indent=4)
     else:
         print(f"Would create stub json file at {new_path} and make dirs")
     if not MOVE_FILES and not COPY_FILES:
@@ -285,6 +297,7 @@ def process_single_file_move_dict(dict_move):
     # if destination already exists, recurse with suffix adding 1
     if os.path.exists(new_path):
         print(f"Destination file already exists: {new_path}")
+        print(f"Not copying or moving file: {old_path}")
         return
     if MOVE_FILES:
         # Create the new directory if it doesn't exist
@@ -367,7 +380,7 @@ def process_file_path(rel_path):
 
 
 if __name__ == "__main__":
-    max_files_to_do = 5
+    max_files_to_do = 5000
     files_done = 0
     ls_dict_failed_files = []
 
