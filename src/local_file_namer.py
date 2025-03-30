@@ -21,7 +21,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Settings #
 
 MOVE_FILES = False
-STUB_OUTPUT = False
+STUB_OUTPUT = True
 
 PATH_LIST_POSSIBLE_MEDIA_LOCS = [
     os.path.join("Y:\\", "Books"),
@@ -103,6 +103,13 @@ def check_if_valid_book(dict_meta_data):
     author = dict_meta_data.get("author", "")
     if author == "":
         print("Author not found.")
+        return False
+    
+    series_num = dict_meta_data.get("series_number", "")
+    try:
+        series_num = int(series_num)
+    except ValueError:
+        print(f"Series number is not a number: {series_num}")
         return False
 
     return True
@@ -267,10 +274,7 @@ def process_file_moves_dict(dict_file_moves):
 
         if STUB_OUTPUT:
             # Create a stub json file at the destination path
-            stub_json_path = new_path.replace(
-                os.path.splitext(new_path)[1],
-                ".json",
-            )
+            stub_json_path = new_path + ".json"
             print(f"Creating dest stub json file at {stub_json_path} and making dirs")
             # Create the new directory if it doesn't exist
             os.makedirs(os.path.dirname(new_path), exist_ok=True)
@@ -298,9 +302,10 @@ ls_skip_dirs = [
 ]
 
 if __name__ == "__main__":
-    max_files_to_do = 5
+    max_files_to_do = 50
     files_done = 0
     ls_dicts_file_moves = []
+    ls_dict_failed_file_paths = []
 
     for root, dirs, files in os.walk(local_books_dir):
         # Skip this root entirely if it's a skip folder
@@ -323,6 +328,12 @@ if __name__ == "__main__":
             
             if not valid_book:
                 print(f"Book is invalid: {dict_book_metadata}")
+                dict_failed_status = {
+                    "path": rel_path,
+                    "metadata": dict_book_metadata,
+                    "valid": False,
+                }
+                ls_dict_failed_file_paths.append(dict_failed_status)
                 continue
 
             ls_path_desired = get_desired_path_for_book(
