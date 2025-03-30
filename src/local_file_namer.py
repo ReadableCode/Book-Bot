@@ -20,12 +20,13 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # %%
 # Settings #
 
+MOVE_FILES = False
+STUB_OUTPUT = False
 
 PATH_LIST_POSSIBLE_MEDIA_LOCS = [
     os.path.join("Y:\\", "Books"),
     os.path.join("U:\\", "Books"),
 ]
-
 
 LS_INVALID_ATHORS_IN_DATABASE = [
     "",
@@ -51,6 +52,8 @@ print(local_books_dir)
 
 LS_INVALID_ATHORS_IN_DATABASE = [auth.lower() for auth in LS_INVALID_ATHORS_IN_DATABASE]
 
+PATH_OUTPUT = os.path.join(local_books_dir, "book_bot_output")
+
 
 # %%
 # Functions: Files #
@@ -72,12 +75,12 @@ def get_desired_path_for_book(dict_meta_data, extension):
         return [
             author,
             series,
-            f"{series_number} - {title}",
+            f"{series_number} - {title}.{extension}",
         ]
     else:
         return [
             author,
-            title
+            f"{title}.{extension}",
         ]
 
 
@@ -240,6 +243,52 @@ def get_metadata_from_path(path, use_ai=True):
 # print("Extracting JSON from AI output")
 # pprint_dict(extract_json_from_ai_output(ai_response))
 
+
+# %%
+# File Moves #
+
+
+def process_file_moves_dict(dict_file_moves):
+    """
+    Process the file moves dictionary.
+    """
+    for dict_move in dict_file_moves:
+        print(f"Proccesing:")
+        pprint_dict(dict_move)
+        
+        book_metadata = dict_move.get("book_metadata", {})
+
+        old_path = dict_move.get("old_path", "")
+        new_path = dict_move.get("new_path", "")
+
+        if not old_path or not new_path:
+            print("Invalid file move dictionary, skipping.")
+            continue
+
+        if STUB_OUTPUT:
+            # Create a stub json file at the destination path
+            stub_json_path = new_path.replace(
+                os.path.splitext(new_path)[1],
+                ".json",
+            )
+            print(f"Creating dest stub json file at {stub_json_path} and making dirs")
+            # Create the new directory if it doesn't exist
+            os.makedirs(os.path.dirname(new_path), exist_ok=True)
+            # Create the stub json file
+            with open(stub_json_path, "w") as f:
+                json.dump(book_metadata, f, indent=4)
+        else:
+            print(f"Would create stub json file at {new_path} and make dirs")
+        if MOVE_FILES:
+            # Create the new directory if it doesn't exist
+            os.makedirs(os.path.dirname(new_path), exist_ok=True)
+
+            # Move the file
+            os.rename(old_path, new_path)
+        else:
+            print(f"Would move file from {old_path} to {new_path}")
+            print(f"Would create dirs for {new_path}")
+
 # %%
 # Main #
 
@@ -251,6 +300,7 @@ ls_skip_dirs = [
 if __name__ == "__main__":
     max_files_to_do = 5
     files_done = 0
+    ls_dicts_file_moves = []
 
     for root, dirs, files in os.walk(local_books_dir):
         # Skip this root entirely if it's a skip folder
@@ -263,21 +313,48 @@ if __name__ == "__main__":
             rel_path = os.path.relpath(os.path.join(root, files[0]), local_books_dir)
             print("-" * 100)
             print(f"Checking file: {rel_path}")
-            dict_book_metadata = get_metadata_from_path(rel_path)
-            valid_book = check_if_valid_book(dict_book_metadata)
 
-            if valid_book:
-                pprint_dict(dict_book_metadata)
-                ls_path_desired = get_desired_path_for_book(
-                    dict_book_metadata,
-                    rel_path.split(".")[-1],
-                )
-                print("Would move book to:")
-                pprint_ls(ls_path_desired)
-                print()
-                files_done += 1
-                if files_done >= max_files_to_do:
-                    break
+            dict_book_metadata = get_metadata_from_path(rel_path)
+
+            valid_book = check_if_valid_book(dict_book_metadata)
+            
+            print("Book Metadata:")
+            pprint_dict(dict_book_metadata)
+            
+            if not valid_book:
+                print(f"Book is invalid: {dict_book_metadata}")
+                continue
+
+            ls_path_desired = get_desired_path_for_book(
+                dict_book_metadata,
+                rel_path.split(".")[-1],
+            )
+
+            print("Would move book to:")
+            print(ls_path_desired)
+
+            dict_this_move = {
+                "old_path": os.path.join(root, rel_path),
+                "new_path": os.path.join(
+                    PATH_OUTPUT,
+                    *ls_path_desired,
+                ),
+                "book_metadata": dict_book_metadata,
+            }
+            ls_dicts_file_moves.append(dict_this_move)
+            print()
+            files_done += 1
+            if files_done >= max_files_to_do:
+                break
+
+    print("==== FILE MOVES ====")
+    pprint_dict(ls_dicts_file_moves)
+    print("===================")
+    
+    process_file_moves_dict(ls_dicts_file_moves)
+    print("==== FILE MOVES COMPLETE ====")
+    print("==============================")
+    print("==== END OF SCRIPT ====")
 
 
 # %%

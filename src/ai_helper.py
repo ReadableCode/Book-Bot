@@ -15,10 +15,21 @@ AI_API_ENDPOINT = "http://192.168.86.197:11434/api/generate"
 
 
 # %%
+# Cache #
+
+dict_cache = {}
+
+
+# %%
 # Functions #
 
 
 def query_ai_for_book_metadata(current_book_path: str) -> str:
+    key = f"{current_book_path}"
+    if key in dict_cache:
+        print(f"Cache hit for {key}")
+        return dict_cache[key]
+
     prompt = f"""
     Given this book path:
     {current_book_path}
@@ -59,6 +70,10 @@ def query_ai_for_book_metadata(current_book_path: str) -> str:
     for i, line in enumerate(output.splitlines(), 1):
         print(f"{i:02}: {line}")
     print("=========================")
+    
+    # Cache the output
+    dict_cache[key] = output
+    print(f"Cache set for {key}")
 
     return output
 
