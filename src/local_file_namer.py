@@ -304,6 +304,7 @@ def get_file_paths_to_process():
     ls_skip_dirs = [
         "Calibre-library",
         "Calibre-books",
+        "book_bot_output",
     ]
     
     ls_file_paths = []
@@ -368,7 +369,7 @@ def process_file_path(rel_path):
 if __name__ == "__main__":
     max_files_to_do = 5
     files_done = 0
-    ls_dict_failed_file_paths = []
+    ls_dict_failed_files = []
 
     ls_files_to_process = get_file_paths_to_process()
     print("==== FILES TO PROCESS (head) ====")
@@ -387,16 +388,15 @@ if __name__ == "__main__":
         else:
             print("Failed to process file:")
             pprint_dict(dict_this_move)
-            ls_dict_failed_file_paths.append(dict_this_move)
+            ls_dict_failed_files.append(dict_this_move)
 
-        print("-" * 100)
         if files_done >= max_files_to_do:
             break
 
     print("==== FILE MOVES COMPLETE ====")
     print("==============================")
     print("==== FAILED FILE MOVES ====")
-    pprint_dict(ls_dict_failed_file_paths)
+    pprint_dict(ls_dict_failed_files)
     print("==== END OF SCRIPT ====")
 
 
