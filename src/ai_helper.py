@@ -33,7 +33,8 @@ else:
 
 
 def query_ai_for_book_metadata(current_book_path: str) -> str:
-    key = f"{current_book_path}"
+    # check for key without extension
+    key = os.path.splitext(current_book_path)[0]
     if key in _CACHE:
         print(f"Cache hit for {key}")
         return _CACHE[key]
@@ -75,8 +76,7 @@ def query_ai_for_book_metadata(current_book_path: str) -> str:
             output += data.get("response", "")
 
     print("==== AI RAW RESPONSE ====")
-    for i, line in enumerate(output.splitlines(), 1):
-        print(f"{i:02}: {line}")
+    print(output)
     print("=========================")
     
     # Cache the output
@@ -93,17 +93,22 @@ def extract_json_from_ai_output(output: str) -> dict:
     print("Checking AI output for JSON:")
     for i, line in enumerate(output.splitlines(), 1):
         line = line.strip()
-        print(f"Line {i:02} being checked: {repr(line)}")
 
         if "`" in line or "{" not in line or "}" not in line:
             continue
 
-        # Remove wrapping quotes
+        # Strip outer quotes if present
         if (line.startswith("'") and line.endswith("'")) or (line.startswith('"') and line.endswith('"')):
             line = line[1:-1]
 
-        # Unescape and clean punctuation
-        line = line.replace('\\"', '"').rstrip(".;,")  # strip trailing junk
+        # Clean excessive escaping
+        line = line.encode().decode("unicode_escape")  # handles \\ and \'
+
+        # Strip trailing junk
+        line = line.rstrip(".;,")
+
+        # Fix leading-zero ints
+        line = re.sub(r'("series_number"\s*:\s*)0+(\d+)', r'\1"\2"', line)
 
         try:
             parsed = json.loads(line)

@@ -70,7 +70,7 @@ def get_desired_path_for_book(dict_meta_data, extension):
     
     # series number to 2 digit padded string
     if series_number != "":
-        series_number = str(int(series_number)).zfill(2)
+        series_number = str(float(series_number)).zfill(2)
 
     if series:
         return [
@@ -93,7 +93,7 @@ def get_desired_path_for_book(dict_meta_data, extension):
 # }
 # extension = "epub"
 
-# pprint_ls(get_desired_path_for_book(test_book_dict, extension))
+# print(get_desired_path_for_book(test_book_dict, extension))
 
 
 # %%
@@ -103,15 +103,18 @@ def get_desired_path_for_book(dict_meta_data, extension):
 def check_if_valid_book(dict_meta_data):
     author = dict_meta_data.get("author", "")
     if author == "":
-        print("Author not found.")
+        return False
+    title = dict_meta_data.get("title", "")
+    if title == "":
         return False
     
     series_num = dict_meta_data.get("series_number", "")
-    try:
-        series_num = int(series_num)
-    except ValueError:
-        print(f"Series number is not a number: {series_num}")
-        return False
+    if series_num != "":
+        try:
+            series_num = float(series_num)
+        except ValueError:
+            print(f"Series number is not a number: {series_num}")
+            return False
 
     return True
 
@@ -142,11 +145,7 @@ def get_metadata_from_path(path, use_ai=True):
     linux_rel_path = os.path.normpath(path).replace("\\", "/")
 
     file_extension = linux_rel_path.split(".")[-1]
-    print(f"Checking file type: {file_extension}")
-    if file_extension not in ["pdf", "epub", "mobi", "azw3", "opf"]:
-        print(f"Invalid file type: {file_extension}")
-        return {}
-    
+
     if use_ai:
         # Use AI to get the metadata
         ai_book_details = query_ai_for_book_metadata(
@@ -154,23 +153,17 @@ def get_metadata_from_path(path, use_ai=True):
         )
         dict_meta_data = extract_json_from_ai_output(ai_book_details)
         author = dict_meta_data.get("author", "")
-        if author == "":
-            print("Author not found.")
-            return {}
-        author = author.title()
         title = dict_meta_data.get("title", "")
-        if title == "":
-            print("Title not found.")
-            return {}
         series = dict_meta_data.get("series", "")
-        series = series.title()
         series_number = dict_meta_data.get("series_number", "")
-
+        
+        # correct casing
+        author = author.title()
         title = title.title()
-        print(f"Found author: {author}")
-        print(f"Found title: {title}")
-        print(f"Found series: {series}")
-        print(f"Found series number: {series_number}")
+        series = series.title()
+        # fix 'S being capitalized
+        title = title.replace("'S", "'s")
+        series = series.replace("'S", "'s")
 
     else:
         author = get_author_from_path(linux_rel_path)
@@ -256,66 +249,64 @@ def get_metadata_from_path(path, use_ai=True):
 # File Moves #
 
 
-def process_file_moves_dict(dict_file_moves):
+def process_single_file_move_dict(dict_move):
     """
-    Process the file moves dictionary.
+    Process a single file move dictionary.
     """
-    for dict_move in dict_file_moves:
-        print(f"Proccesing:")
-        pprint_dict(dict_move)
-        
-        book_metadata = dict_move.get("book_metadata", {})
+    print(f"Proccesing:")
+    pprint_dict(dict_move)
+    
+    book_metadata = dict_move.get("book_metadata", {})
 
-        old_path = dict_move.get("old_path", "")
-        new_path = dict_move.get("new_path", "")
+    old_path = dict_move.get("old_path", "")
+    new_path = dict_move.get("new_path", "")
 
-        if not old_path or not new_path:
-            print("Invalid file move dictionary, skipping.")
-            continue
+    if not old_path or not new_path:
+        print("Invalid file move dictionary, skipping.")
+        return
 
-        if STUB_OUTPUT:
-            # Create a stub json file at the destination path
-            stub_json_path = new_path + ".json"
-            print(f"Creating dest stub json file at {stub_json_path} and making dirs")
-            # Create the new directory if it doesn't exist
-            os.makedirs(os.path.dirname(new_path), exist_ok=True)
-            # Create the stub json file
-            with open(stub_json_path, "w") as f:
-                json.dump(book_metadata, f, indent=4)
-        else:
-            print(f"Would create stub json file at {new_path} and make dirs")
-        if not MOVE_FILES and not COPY_FILES:
-            print(f"Would move or copy file from {old_path} to {new_path}")
-            print(f"Would create dirs for {new_path}")
-            continue
-        if MOVE_FILES and COPY_FILES:
-            raise ValueError("Cannot move and copy files at the same time.")
-        if MOVE_FILES:
-            # Create the new directory if it doesn't exist
-            os.makedirs(os.path.dirname(new_path), exist_ok=True)
+    if STUB_OUTPUT:
+        # Create a stub json file at the destination path
+        stub_json_path = new_path + ".json"
+        print(f"Creating dest stub json file at {stub_json_path} and making dirs")
+        # Create the new directory if it doesn't exist
+        os.makedirs(os.path.dirname(new_path), exist_ok=True)
+        # Create the stub json file
+        with open(stub_json_path, "w") as f:
+            json.dump(book_metadata, f, indent=4)
+    else:
+        print(f"Would create stub json file at {new_path} and make dirs")
+    if not MOVE_FILES and not COPY_FILES:
+        print(f"Would move or copy file from {old_path} to {new_path}")
+        print(f"Would create dirs for {new_path}")
+        return
+    if MOVE_FILES and COPY_FILES:
+        raise ValueError("Cannot move and copy files at the same time.")
+    # if destination already exists, recurse with suffix adding 1
+    if os.path.exists(new_path):
+        print(f"Destination file already exists: {new_path}")
+        return
+    if MOVE_FILES:
+        # Create the new directory if it doesn't exist
+        os.makedirs(os.path.dirname(new_path), exist_ok=True)
 
-            # Move the file
-            os.rename(old_path, new_path)
-        if COPY_FILES:
-            # Create the new directory if it doesn't exist
-            os.makedirs(os.path.dirname(new_path), exist_ok=True)
+        # Move the file
+        os.rename(old_path, new_path)
+    if COPY_FILES:
+        # Create the new directory if it doesn't exist
+        os.makedirs(os.path.dirname(new_path), exist_ok=True)
 
-            # Copy the file
-            os.system(f"copy {old_path} {new_path}")
+        # Copy the file
+        os.system(f"copy {old_path} {new_path}")
 
-# %%
-# Main #
 
-ls_skip_dirs = [
-    "Calibre-library",
-    "Calibre-books",
-]
-
-if __name__ == "__main__":
-    max_files_to_do = 500
-    files_done = 0
-    ls_dicts_file_moves = []
-    ls_dict_failed_file_paths = []
+def get_file_paths_to_process():
+    ls_skip_dirs = [
+        "Calibre-library",
+        "Calibre-books",
+    ]
+    
+    ls_file_paths = []
 
     for root, dirs, files in os.walk(local_books_dir):
         # Skip this root entirely if it's a skip folder
@@ -326,53 +317,82 @@ if __name__ == "__main__":
 
         if files:
             rel_path = os.path.relpath(os.path.join(root, files[0]), local_books_dir)
-            print("-" * 100)
-            print(f"Checking file: {rel_path}")
+            ls_file_paths.append(rel_path)
+    return ls_file_paths
 
-            dict_book_metadata = get_metadata_from_path(rel_path)
 
-            valid_book = check_if_valid_book(dict_book_metadata)
-            
-            print("Book Metadata:")
-            pprint_dict(dict_book_metadata)
-            
-            if not valid_book:
-                print(f"Book is invalid: {dict_book_metadata}")
-                dict_failed_status = {
-                    "path": rel_path,
-                    "metadata": dict_book_metadata,
-                    "valid": False,
-                }
-                ls_dict_failed_file_paths.append(dict_failed_status)
-                continue
+def process_file_path(rel_path):
+    dict_book_metadata = get_metadata_from_path(rel_path)
 
-            ls_path_desired = get_desired_path_for_book(
-                dict_book_metadata,
-                rel_path.split(".")[-1],
-            )
-
-            print("Would move book to:")
-            print(ls_path_desired)
-
-            dict_this_move = {
-                "old_path": os.path.join(root, rel_path),
-                "new_path": os.path.join(
-                    PATH_OUTPUT,
-                    *ls_path_desired,
-                ),
-                "book_metadata": dict_book_metadata,
-            }
-            ls_dicts_file_moves.append(dict_this_move)
-            print()
-            files_done += 1
-            if files_done >= max_files_to_do:
-                break
-
-    print("==== FILE MOVES ====")
-    pprint_dict(ls_dicts_file_moves)
-    print("===================")
+    valid_book = check_if_valid_book(dict_book_metadata)
     
-    process_file_moves_dict(ls_dicts_file_moves)
+    print("Book Metadata:")
+    pprint_dict(dict_book_metadata)
+    
+    if not valid_book:
+        print("Book is invalid")
+        dict_this_move = {
+            "old_path": rel_path,
+            "new_path": "",
+            "book_metadata": dict_book_metadata,
+            "valid": False,
+        }
+        return dict_this_move
+    
+    extension = rel_path.split(".")[-1]
+    ls_path_desired = get_desired_path_for_book(
+        dict_book_metadata,
+        extension,
+    )
+
+    print("Would move book to:")
+    print(ls_path_desired)
+
+    dict_this_move = {
+        "old_path": os.path.join(local_books_dir, rel_path),
+        "new_path": os.path.join(
+            PATH_OUTPUT,
+            *ls_path_desired,
+        ),
+        "book_metadata": dict_book_metadata,
+        "valid": True,
+    }
+    process_single_file_move_dict(dict_this_move)
+    return dict_this_move
+
+
+# %%
+# Main #
+
+
+if __name__ == "__main__":
+    max_files_to_do = 5
+    files_done = 0
+    ls_dict_failed_file_paths = []
+
+    ls_files_to_process = get_file_paths_to_process()
+    print("==== FILES TO PROCESS (head) ====")
+    pprint_ls(ls_files_to_process[:10])
+    print(f"Total files to process: {len(ls_files_to_process)}")
+
+
+    for path_num, rel_path in enumerate(ls_files_to_process):
+        print("-" * 100)
+        print(f"Checking file: {rel_path}\n({path_num + 1}/{len(ls_files_to_process)})")
+        print("-" * 100)
+
+        dict_this_move = process_file_path(rel_path)
+        if dict_this_move["valid"]:
+            files_done += 1
+        else:
+            print("Failed to process file:")
+            pprint_dict(dict_this_move)
+            ls_dict_failed_file_paths.append(dict_this_move)
+
+        print("-" * 100)
+        if files_done >= max_files_to_do:
+            break
+
     print("==== FILE MOVES COMPLETE ====")
     print("==============================")
     print("==== FAILED FILE MOVES ====")
