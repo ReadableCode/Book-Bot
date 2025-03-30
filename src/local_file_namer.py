@@ -21,6 +21,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Settings #
 
 MOVE_FILES = False
+COPY_FILES = False
 STUB_OUTPUT = True
 
 PATH_LIST_POSSIBLE_MEDIA_LOCS = [
@@ -283,15 +284,24 @@ def process_file_moves_dict(dict_file_moves):
                 json.dump(book_metadata, f, indent=4)
         else:
             print(f"Would create stub json file at {new_path} and make dirs")
+        if not MOVE_FILES and not COPY_FILES:
+            print(f"Would move or copy file from {old_path} to {new_path}")
+            print(f"Would create dirs for {new_path}")
+            continue
+        if MOVE_FILES and COPY_FILES:
+            raise ValueError("Cannot move and copy files at the same time.")
         if MOVE_FILES:
             # Create the new directory if it doesn't exist
             os.makedirs(os.path.dirname(new_path), exist_ok=True)
 
             # Move the file
             os.rename(old_path, new_path)
-        else:
-            print(f"Would move file from {old_path} to {new_path}")
-            print(f"Would create dirs for {new_path}")
+        if COPY_FILES:
+            # Create the new directory if it doesn't exist
+            os.makedirs(os.path.dirname(new_path), exist_ok=True)
+
+            # Copy the file
+            os.system(f"copy {old_path} {new_path}")
 
 # %%
 # Main #
@@ -302,7 +312,7 @@ ls_skip_dirs = [
 ]
 
 if __name__ == "__main__":
-    max_files_to_do = 50
+    max_files_to_do = 500
     files_done = 0
     ls_dicts_file_moves = []
     ls_dict_failed_file_paths = []
@@ -365,6 +375,8 @@ if __name__ == "__main__":
     process_file_moves_dict(ls_dicts_file_moves)
     print("==== FILE MOVES COMPLETE ====")
     print("==============================")
+    print("==== FAILED FILE MOVES ====")
+    pprint_dict(ls_dict_failed_file_paths)
     print("==== END OF SCRIPT ====")
 
 
