@@ -3,7 +3,8 @@
 
 
 import json
-
+import os
+import re
 import requests
 
 # %%
@@ -16,8 +17,15 @@ AI_API_ENDPOINT = "http://192.168.86.197:11434/api/generate"
 
 # %%
 # Cache #
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CACHE_PATH = os.path.join(PROJECT_ROOT, "ai_response_cache.json")
 
-dict_cache = {}
+# Load cache once
+if os.path.exists(CACHE_PATH):
+    with open(CACHE_PATH, "r", encoding="utf-8") as f:
+        _CACHE = json.load(f)
+else:
+    _CACHE = {}
 
 
 # %%
@@ -26,9 +34,9 @@ dict_cache = {}
 
 def query_ai_for_book_metadata(current_book_path: str) -> str:
     key = f"{current_book_path}"
-    if key in dict_cache:
+    if key in _CACHE:
         print(f"Cache hit for {key}")
-        return dict_cache[key]
+        return _CACHE[key]
 
     prompt = f"""
     Given this book path:
@@ -72,13 +80,17 @@ def query_ai_for_book_metadata(current_book_path: str) -> str:
     print("=========================")
     
     # Cache the output
-    dict_cache[key] = output
-    print(f"Cache set for {key}")
+    _CACHE[key] = output
+
+    # Save the cache to file
+    with open(CACHE_PATH, "w", encoding="utf-8") as f:
+        json.dump(_CACHE, f, indent=4)
 
     return output
 
 
 def extract_json_from_ai_output(output: str) -> dict:
+    print("Checking AI output for JSON:")
     for i, line in enumerate(output.splitlines(), 1):
         line = line.strip()
         print(f"Line {i:02} being checked: {repr(line)}")
@@ -86,12 +98,12 @@ def extract_json_from_ai_output(output: str) -> dict:
         if "`" in line or "{" not in line or "}" not in line:
             continue
 
-        # Remove wrapping quotes if present
+        # Remove wrapping quotes
         if (line.startswith("'") and line.endswith("'")) or (line.startswith('"') and line.endswith('"')):
             line = line[1:-1]
 
-        # Unescape escaped quotes if needed
-        line = line.replace('\\"', '"')
+        # Unescape and clean punctuation
+        line = line.replace('\\"', '"').rstrip(".;,")  # strip trailing junk
 
         try:
             parsed = json.loads(line)
