@@ -172,3 +172,5 @@ cython_debug/
 
 # book-data
 book-data/
+
+*cache.json
