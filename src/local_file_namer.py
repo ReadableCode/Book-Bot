@@ -18,13 +18,13 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # %%
 # Settings #
 
-MOVE_FILES = False
+MOVE_FILES = True
 COPY_FILES = False
 STUB_OUTPUT = True
 
 PATH_LIST_POSSIBLE_MEDIA_LOCS = [
-    os.path.join("Y:\\", "Books"),
-    os.path.join("U:\\", "Books"),
+    os.path.join("Y:\\", "Books to ai move"),
+    os.path.join("U:\\", "Books to ai move"),
 ]
 
 LS_INVALID_ATHORS_IN_DATABASE = [
@@ -56,6 +56,40 @@ PATH_OUTPUT = os.path.join(local_books_dir, "book_bot_output")
 
 # %%
 # Functions: Files #
+
+
+def recursive_rm_empty_dirs(path):
+    """
+    Recursively remove empty directories.
+    """
+    if os.path.isdir(path):
+        # Get a list of all files and directories in the current directory
+        items = os.listdir(path)
+
+        # If the directory is empty, remove it
+        if not items:
+            os.rmdir(path)
+            print(f"Removed empty directory: {path}")
+            return True
+
+        # If not empty, check each item
+        for item in items:
+            item_path = os.path.join(path, item)
+            if os.path.isdir(item_path):
+                # Recursively check subdirectories
+                if recursive_rm_empty_dirs(item_path):
+                    print(f"Removed empty directory: {item_path}")
+
+        # After checking all items, if the directory is empty, remove it
+        if not os.listdir(path):
+            os.rmdir(path)
+            print(f"Removed empty directory: {path}")
+            return True
+
+    return False
+
+
+# recursive_rm_empty_dirs(local_books_dir)
 
 
 def sanitize_filename(path: str) -> str:
