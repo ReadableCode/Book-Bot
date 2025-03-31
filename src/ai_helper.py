@@ -120,5 +120,13 @@ def extract_json_from_ai_output(output: str) -> dict:
     raise json.JSONDecodeError("No valid JSON found", output, 0)
 
 
+if __name__ == "__main__":
+    test_output = """
+    Here is the dictionary:
+
+    {"author":"Dan Ames","series":"Jack Reacher Cases Series","series_number":17,"title":"A Man With Nothing to Lose"}`
+    """
+    pprint_dict(extract_json_from_ai_output(test_output))
+
 
 # %%
