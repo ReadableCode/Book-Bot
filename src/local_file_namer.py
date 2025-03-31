@@ -1,16 +1,13 @@
 # %%
 # Imports #
 
-import os
 import json
-from local_database_postgres import (
-    get_authors_list,
-    get_books_by_author,
-    get_series_by_author,
-)
+import os
 import re
+
+from ai_helper import extract_json_from_ai_output, query_ai_for_book_metadata
+from local_database_postgres import get_authors_list, get_books_by_author
 from utils.display_tools import pprint_df, pprint_dict, pprint_ls  # noqa
-from ai_helper import query_ai_for_book_metadata, extract_json_from_ai_output
 
 # %%
 # Constants #
@@ -60,9 +57,11 @@ PATH_OUTPUT = os.path.join(local_books_dir, "book_bot_output")
 # %%
 # Functions: Files #
 
+
 def sanitize_filename(path: str) -> str:
     # Replace invalid Windows filename characters with underscore
     return re.sub(r'[<>:"/\\|?*]', "_", path)
+
 
 def get_desired_path_for_book(dict_meta_data, extension):
     """
@@ -72,11 +71,11 @@ def get_desired_path_for_book(dict_meta_data, extension):
     series = dict_meta_data.get("series", "")
     series_number = dict_meta_data.get("series_number", "")
     title = dict_meta_data.get("title", "")
-    
+
     # series number to 2 digit padded string
     if series_number != "":
         series_number = str(float(series_number)).zfill(2)
-    
+
     # sanitize the title
     title = sanitize_filename(title)
     author = sanitize_filename(author)
@@ -84,7 +83,11 @@ def get_desired_path_for_book(dict_meta_data, extension):
     extension = sanitize_filename(extension)
 
     if series:
-        series_num_title_string = f"{series_number} - {title}.{extension}" if series_number else f"{title}.{extension}"
+        series_num_title_string = (
+            f"{series_number} - {title}.{extension}"
+            if series_number
+            else f"{title}.{extension}"
+        )
         return [
             author,
             series,
@@ -119,7 +122,10 @@ def check_if_valid_book(dict_meta_data):
     title = dict_meta_data.get("title", "")
     if title == "":
         return False
-    
+
+    series = dict_meta_data.get("series", "")
+    if series == "" or series == " - ":
+        return False
     series_num = dict_meta_data.get("series_number", "")
     if series_num != "":
         try:
@@ -168,7 +174,7 @@ def get_metadata_from_path(path, use_ai=True):
         title = dict_meta_data.get("title", "")
         series = dict_meta_data.get("series", "")
         series_number = dict_meta_data.get("series_number", "")
-        
+
         # correct casing
         author = author.title()
         title = title.title()
@@ -252,7 +258,6 @@ def get_metadata_from_path(path, use_ai=True):
 # # %%
 
 
-
 # print("Extracting JSON from AI output")
 # pprint_dict(extract_json_from_ai_output(ai_response))
 
@@ -267,7 +272,7 @@ def process_single_file_move_dict(dict_move):
     """
     print(f"Proccesing:")
     pprint_dict(dict_move)
-    
+
     book_metadata = dict_move.get("book_metadata", {})
 
     old_path = dict_move.get("old_path", "")
@@ -319,7 +324,7 @@ def get_file_paths_to_process():
         "Calibre-books",
         "book_bot_output",
     ]
-    
+
     ls_file_paths = []
 
     for root, dirs, files in os.walk(local_books_dir):
@@ -336,13 +341,23 @@ def get_file_paths_to_process():
 
 
 def process_file_path(rel_path):
-    dict_book_metadata = get_metadata_from_path(rel_path)
+    try:
+        dict_book_metadata = get_metadata_from_path(rel_path)
+    except Exception as e:
+        print(f"Error getting metadata from path: {rel_path}")
+        print(e)
+        return {
+            "old_path": rel_path,
+            "new_path": "",
+            "book_metadata": {},
+            "valid": False,
+        }
 
     valid_book = check_if_valid_book(dict_book_metadata)
-    
+
     print("Book Metadata:")
     pprint_dict(dict_book_metadata)
-    
+
     if not valid_book:
         print("Book is invalid")
         dict_this_move = {
@@ -352,7 +367,7 @@ def process_file_path(rel_path):
             "valid": False,
         }
         return dict_this_move
-    
+
     extension = rel_path.split(".")[-1]
     ls_path_desired = get_desired_path_for_book(
         dict_book_metadata,
@@ -388,7 +403,6 @@ if __name__ == "__main__":
     print("==== FILES TO PROCESS (head) ====")
     pprint_ls(ls_files_to_process[:10])
     print(f"Total files to process: {len(ls_files_to_process)}")
-
 
     for path_num, rel_path in enumerate(ls_files_to_process):
         print("-" * 100)
