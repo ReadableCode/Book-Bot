@@ -6,6 +6,7 @@ import json
 import os
 import re
 import requests
+from utils.display_tools import pprint_df, pprint_dict, pprint_ls  # noqa
 
 # %%
 # Constants #
@@ -94,7 +95,7 @@ def extract_json_from_ai_output(output: str) -> dict:
     for i, line in enumerate(output.splitlines(), 1):
         line = line.strip()
 
-        if "`" in line or "{" not in line or "}" not in line:
+        if "{" not in line or "}" not in line:
             continue
 
         # Strip outer quotes if present
@@ -105,7 +106,7 @@ def extract_json_from_ai_output(output: str) -> dict:
         line = line.encode().decode("unicode_escape")  # handles \\ and \'
 
         # Strip trailing junk
-        line = line.rstrip(".;,")
+        line = line.rstrip("`.;,")
 
         # Fix leading-zero ints
         line = re.sub(r'("series_number"\s*:\s*)0+(\d+)', r'\1"\2"', line)
