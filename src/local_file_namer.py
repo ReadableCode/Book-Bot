@@ -107,7 +107,7 @@ def get_desired_path_for_book(dict_meta_data, extension):
     title = dict_meta_data.get("title", "")
 
     # series number to 2 digit padded string
-    if series_number != "":
+    if series_number and series_number != "":
         series_number = str(float(series_number)).zfill(2)
 
     # sanitize the title
@@ -164,8 +164,8 @@ def check_if_valid_book(dict_meta_data):
     if series_num != "":
         try:
             series_num = float(series_num)
-        except ValueError:
-            print(f"Series number is not a number: {series_num}")
+        except Exception as e:
+            print(f"Series number is not a number: {series_num} caused: {e}")
             return False
 
     return True
