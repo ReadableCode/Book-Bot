@@ -89,9 +89,6 @@ def recursive_rm_empty_dirs(path):
     return False
 
 
-# recursive_rm_empty_dirs(local_books_dir)
-
-
 def sanitize_filename(path: str) -> str:
     # Replace invalid Windows filename characters with underscore
     return re.sub(r'[<>:"/\\|?*]', "_", path)
@@ -157,10 +154,8 @@ def check_if_valid_book(dict_meta_data):
     if title == "":
         return False
 
-    series = dict_meta_data.get("series", "")
-    if series == "" or series == " - ":
-        return False
     series_num = dict_meta_data.get("series_number", "")
+
     if series_num != "":
         try:
             series_num = float(series_num)
@@ -208,6 +203,26 @@ def get_metadata_from_path(path, use_ai=True):
         title = dict_meta_data.get("title", "")
         series = dict_meta_data.get("series", "")
         series_number = dict_meta_data.get("series_number", "")
+
+        ls_invalid_series_data = [
+            "",
+            "none",
+            "n/a",
+            "m+f",
+            " - ",
+            "a novel",
+            "a book",
+        ]
+        ls_invalid_series_part_data = ["box set", "boxset", "complete works"]
+        if str(series).lower() in ls_invalid_series_data or any(
+            part in str(series).lower() for part in ls_invalid_series_part_data
+        ):
+            series = ""
+
+        if str(series_number).lower() in ls_invalid_series_data or any(
+            part in str(series_number).lower() for part in ls_invalid_series_part_data
+        ):
+            series_number = ""
 
         # correct casing
         author = author.title()
@@ -300,58 +315,6 @@ def get_metadata_from_path(path, use_ai=True):
 # File Moves #
 
 
-def process_single_file_move_dict(dict_move):
-    """
-    Process a single file move dictionary.
-    """
-    print(f"Proccesing:")
-    pprint_dict(dict_move)
-
-    book_metadata = dict_move.get("book_metadata", {})
-
-    old_path = dict_move.get("old_path", "")
-    new_path = dict_move.get("new_path", "")
-
-    if not old_path or not new_path:
-        print("Invalid file move dictionary, skipping.")
-        return
-
-    if STUB_OUTPUT:
-        # Create a stub json file at the destination path
-        stub_json_path = new_path + ".json"
-        print(f"Creating dest stub json file at {stub_json_path} and making dirs")
-        # Create the new directory if it doesn't exist
-        os.makedirs(os.path.dirname(new_path), exist_ok=True)
-        # Create the stub json file
-        with open(stub_json_path, "w") as f:
-            json.dump(dict_move, f, indent=4)
-    else:
-        print(f"Would create stub json file at {new_path} and make dirs")
-    if not MOVE_FILES and not COPY_FILES:
-        print(f"Would move or copy file from {old_path} to {new_path}")
-        print(f"Would create dirs for {new_path}")
-        return
-    if MOVE_FILES and COPY_FILES:
-        raise ValueError("Cannot move and copy files at the same time.")
-    # if destination already exists, recurse with suffix adding 1
-    if os.path.exists(new_path):
-        print(f"Destination file already exists: {new_path}")
-        print(f"Not copying or moving file: {old_path}")
-        return
-    if MOVE_FILES:
-        # Create the new directory if it doesn't exist
-        os.makedirs(os.path.dirname(new_path), exist_ok=True)
-
-        # Move the file
-        os.rename(old_path, new_path)
-    if COPY_FILES:
-        # Create the new directory if it doesn't exist
-        os.makedirs(os.path.dirname(new_path), exist_ok=True)
-
-        # Copy the file
-        os.system(f"copy {old_path} {new_path}")
-
-
 def get_file_paths_to_process():
     ls_skip_dirs = [
         "Calibre-library",
@@ -372,6 +335,88 @@ def get_file_paths_to_process():
             rel_path = os.path.relpath(os.path.join(root, files[0]), local_books_dir)
             ls_file_paths.append(rel_path)
     return ls_file_paths
+
+
+def process_single_file_move_dict(dict_move):
+    """
+    Process a single file move dictionary.
+    """
+    print("Proccesing move command:")
+    pprint_dict(dict_move)
+
+    single_file_result_dict = {
+        "move_status": "",
+        "copy_status": "",
+        "stub_json_status": "",
+        "error": False,
+    }
+
+    old_path = dict_move.get("old_path", "")
+    new_path = dict_move.get("new_path", "")
+
+    if not old_path or not new_path:
+        print("Invalid file move dictionary, skipping.")
+        single_file_result_dict["error"] = True
+        return single_file_result_dict
+
+    if STUB_OUTPUT:
+        # Create a stub json file at the destination path
+        stub_json_path = new_path + ".json"
+        print(f"Creating dest stub json file at {stub_json_path} and making dirs")
+        # Create the new directory if it doesn't exist
+        os.makedirs(os.path.dirname(new_path), exist_ok=True)
+        # Create the stub json file
+        with open(stub_json_path, "w") as f:
+            json.dump(dict_move, f, indent=4)
+        single_file_result_dict["stub_json_status"] = "created"
+    else:
+        print(f"Would create stub json file at {new_path} and make dirs")
+        single_file_result_dict["stub_json_status"] = "not created, disabled"
+
+    if not MOVE_FILES and not COPY_FILES:
+        print(f"Would create dirs and move or copy file from {old_path} to {new_path}")
+        return single_file_result_dict
+
+    if MOVE_FILES and COPY_FILES:
+        print("Both move and copy are enabled, not moving or copying.")
+        single_file_result_dict = {
+            "move_status": "not moved, both move and copy enabled",
+            "copy_status": "not copied, both move and copy enabled",
+            "error": True,
+        }
+        return single_file_result_dict
+
+    if MOVE_FILES:
+        if os.path.exists(new_path):
+            print(f"Destination file already exists: {new_path}")
+            print(f"Not moving file: {old_path}")
+            single_file_result_dict["move_status"] = "not moved, dest exists"
+            return single_file_result_dict
+
+        # Create the new directory if it doesn't exist
+        os.makedirs(os.path.dirname(new_path), exist_ok=True)
+
+        # Move the file
+        os.rename(old_path, new_path)
+        single_file_result_dict["move_status"] = "moved"
+        print(f"Moved file from {old_path} to {new_path}")
+        return single_file_result_dict
+
+    if COPY_FILES:
+        if os.path.exists(new_path):
+            print(f"Destination file already exists: {new_path}")
+            print(f"Not copying file: {old_path}")
+            single_file_result_dict["copy_status"] = "not copied, dest exists"
+            return single_file_result_dict
+
+        # Create the new directory if it doesn't exist
+        os.makedirs(os.path.dirname(new_path), exist_ok=True)
+
+        # Copy the file
+        os.system(f"copy {old_path} {new_path}")
+        single_file_result_dict["move_status"] = "copied"
+        print(f"Copied file from {old_path} to {new_path}")
+        return single_file_result_dict
 
 
 def process_file_path(rel_path):
@@ -399,6 +444,7 @@ def process_file_path(rel_path):
             "new_path": "",
             "book_metadata": dict_book_metadata,
             "valid": False,
+            "processed": False,
         }
         return dict_this_move
 
@@ -420,7 +466,8 @@ def process_file_path(rel_path):
         "book_metadata": dict_book_metadata,
         "valid": True,
     }
-    process_single_file_move_dict(dict_this_move)
+    result_dict = process_single_file_move_dict(dict_this_move)
+    dict_this_move["move result"] = result_dict
     return dict_this_move
 
 
@@ -429,7 +476,7 @@ def process_file_path(rel_path):
 
 
 if __name__ == "__main__":
-    max_files_to_do = 5000
+    max_files_to_do = 100
     files_done = 0
     ls_dict_failed_files = []
 
@@ -444,11 +491,14 @@ if __name__ == "__main__":
         print("-" * 100)
 
         dict_this_move = process_file_path(rel_path)
-        if dict_this_move["valid"]:
+
+        print("Action results:")
+        pprint_dict(dict_this_move)
+
+        if dict_this_move["valid"] and dict_this_move["move result"]["error"] is False:
             files_done += 1
         else:
-            print("Failed to process file:")
-            pprint_dict(dict_this_move)
+            print("ERROR: Failed to process file")
             ls_dict_failed_files.append(dict_this_move)
 
         if files_done >= max_files_to_do:
@@ -458,6 +508,17 @@ if __name__ == "__main__":
     print("==============================")
     print("==== FAILED FILE MOVES ====")
     pprint_dict(ls_dict_failed_files)
+    print(f"Number of failed moves: {len(ls_dict_failed_files)}")
+    print("==============================")
+
+
+# %%
+# Main: Extra Commands #
+
+
+if __name__ == "__main__":
+    print("==== Extra Commands ====")
+    recursive_rm_empty_dirs(local_books_dir)
     print("==== END OF SCRIPT ====")
 
 
