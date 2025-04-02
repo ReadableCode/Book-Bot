@@ -204,6 +204,9 @@ def get_metadata_from_path(path, use_ai=True):
         series = dict_meta_data.get("series", "")
         series_number = dict_meta_data.get("series_number", "")
 
+        # fix series number like "02 (of 5)"
+        series_number = re.sub(r"\D.*", "", str(series_number))
+
         ls_invalid_series_data = [
             "",
             "none",
@@ -212,6 +215,7 @@ def get_metadata_from_path(path, use_ai=True):
             " - ",
             "a novel",
             "a book",
+            "a",
         ]
         ls_invalid_series_part_data = ["box set", "boxset", "complete works"]
         if str(series).lower() in ls_invalid_series_data or any(
@@ -390,17 +394,33 @@ def process_single_file_move_dict(dict_move):
         if os.path.exists(new_path):
             print(f"Destination file already exists: {new_path}")
             print(f"Not moving file: {old_path}")
-            single_file_result_dict["move_status"] = "not moved, dest exists"
+            single_file_result_dict["move_status"] = "moved to duplicate path"
+            new_path = old_path.replace(
+                "Books to ai move", "Books to ai move duplicates"
+            )
+            print(f"Moving file to: {new_path}")
+
+            # Create the new directory if it doesn't exist
+            os.makedirs(os.path.dirname(new_path), exist_ok=True)
+
+            # Move the file
+            os.rename(old_path, new_path)
+            single_file_result_dict["move_status"] = "moved to duplicate path"
+
+            print(f"Moved file from {old_path} to {new_path}")
             return single_file_result_dict
+        else:
+            print(f"Moving file to: {new_path}")
 
-        # Create the new directory if it doesn't exist
-        os.makedirs(os.path.dirname(new_path), exist_ok=True)
+            # Create the new directory if it doesn't exist
+            os.makedirs(os.path.dirname(new_path), exist_ok=True)
 
-        # Move the file
-        os.rename(old_path, new_path)
-        single_file_result_dict["move_status"] = "moved"
-        print(f"Moved file from {old_path} to {new_path}")
-        return single_file_result_dict
+            # Move the file
+            os.rename(old_path, new_path)
+            single_file_result_dict["move_status"] = "moved"
+
+            print(f"Moved file from {old_path} to {new_path}")
+            return single_file_result_dict
 
     if COPY_FILES:
         if os.path.exists(new_path):

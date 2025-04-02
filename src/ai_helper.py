@@ -5,7 +5,9 @@
 import json
 import os
 import re
+
 import requests
+
 from utils.display_tools import pprint_df, pprint_dict, pprint_ls  # noqa
 
 # %%
@@ -60,6 +62,8 @@ def query_ai_for_book_metadata(current_book_path: str) -> str:
     The dictionary should be formatted as a single line of json.
     
     The JSON should all be on the same line with not breaking characters in between at all, do not mess this up or it will break everything.
+    
+    Do not include any other text, just the JSON. Do not include any code tags or markdown, do not include anything other than numbers for the series number.
     """  # noqa: E501
 
     response = requests.post(
@@ -79,7 +83,7 @@ def query_ai_for_book_metadata(current_book_path: str) -> str:
     print("==== AI RAW RESPONSE ====")
     print(output)
     print("=========================")
-    
+
     # Cache the output
     _CACHE[key] = output
 
@@ -95,11 +99,17 @@ def extract_json_from_ai_output(output: str) -> dict:
     for i, line in enumerate(output.splitlines(), 1):
         line = line.strip()
 
+        # remove </code> if present
+        if "</code>" in line:
+            line = line.replace("</code>", "")
+
         if "{" not in line or "}" not in line:
             continue
 
         # Strip outer quotes if present
-        if (line.startswith("'") and line.endswith("'")) or (line.startswith('"') and line.endswith('"')):
+        if (line.startswith("'") and line.endswith("'")) or (
+            line.startswith('"') and line.endswith('"')
+        ):
             line = line[1:-1]
 
         # Clean excessive escaping
