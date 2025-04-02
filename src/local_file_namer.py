@@ -131,17 +131,6 @@ def get_desired_path_for_book(dict_meta_data, extension):
         ]
 
 
-# test_book_dict = {
-#   "author": "Sarah J. Maas",
-#   "series": "A Court of Thorns and Roses Series",
-#   "series_number": "3",
-#   "title": "A Court of Frost and Starlight"
-# }
-# extension = "epub"
-
-# print(get_desired_path_for_book(test_book_dict, extension))
-
-
 # %%
 # Functions: Metadata #
 
@@ -267,52 +256,6 @@ def get_metadata_from_path(path, use_ai=True):
     }
 
     return dict_meta_data
-
-
-# %%
-
-
-# author_name = "Sarah J. Maas"
-# ls_series_by_author = get_series_by_author(author_name)
-
-# print(f"Series by {author_name}:")
-# pprint_ls(ls_series_by_author)
-
-
-# # %%
-
-# author_name = "Sarah J. Maas"
-# author_name = "orson scott card"
-# books_by_author = get_books_by_author(author_name)
-
-# print(f"Books by {author_name}:")
-# pprint_ls(books_by_author)
-
-
-# %%
-
-
-# test_path = "Sarah J. Maas/A Court of Frost and Starlight (A Court of Thorns and Roses) (799)/A Court of Frost and Starlight (A Court of - Sarah J. Maas.epub"
-
-# print(f"Getting metadata from path: {test_path}")
-# ai_response: str = query_ai_for_book_metadata(test_path)
-# print("AI response:")
-
-
-# # %%
-
-
-# print("==== AI RAW RESPONSE ====")
-# for i, line in enumerate(ai_response.splitlines(), 1):
-#     print(f"{i:02}: {line}")
-# print("=========================")
-
-
-# # %%
-
-
-# print("Extracting JSON from AI output")
-# pprint_dict(extract_json_from_ai_output(ai_response))
 
 
 # %%

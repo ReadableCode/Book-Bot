@@ -8,8 +8,6 @@ import re
 
 import requests
 
-from utils.display_tools import pprint_df, pprint_dict, pprint_ls  # noqa
-
 # %%
 # Constants #
 
@@ -60,9 +58,9 @@ def query_ai_for_book_metadata(current_book_path: str) -> str:
     The series number should be the number of the book in the series.
     The book title should be the full title of the book, including the subtitle.
     The dictionary should be formatted as a single line of json.
-    
+
     The JSON should all be on the same line with not breaking characters in between at all, do not mess this up or it will break everything.
-    
+
     Do not include any other text, just the JSON. Do not include any code tags or markdown, do not include anything other than numbers for the series number.
     """  # noqa: E501
 
@@ -129,15 +127,6 @@ def extract_json_from_ai_output(output: str) -> dict:
             print(f"❌ Failed to parse JSON on line {i:02}: {repr(line)}")
 
     raise json.JSONDecodeError("No valid JSON found", output, 0)
-
-
-if __name__ == "__main__":
-    test_output = """
-    Here is the dictionary:
-
-    {"author":"Dan Ames","series":"Jack Reacher Cases Series","series_number":17,"title":"A Man With Nothing to Lose"}`
-    """
-    pprint_dict(extract_json_from_ai_output(test_output))
 
 
 # %%
