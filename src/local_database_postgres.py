@@ -34,8 +34,8 @@ if os.path.exists(dotenv_path):
 POSTGRES_URL = os.getenv("POSTGRES_URL")
 POSTGRES_USER = os.getenv("POSTGRES_USER")
 POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD")
-POSTGRES_DB = os.getenv("POSTGRES_DB")
 POSTGRES_PORT = os.getenv("POSTGRES_PORT")
+POSTGRES_DB = "book_bot"
 
 # %%
 # Connect To Postgres #
