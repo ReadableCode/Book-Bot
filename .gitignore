@@ -174,3 +174,4 @@ cython_debug/
 book-data/
 
 *cache.json
+data/
