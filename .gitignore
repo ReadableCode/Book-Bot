@@ -175,3 +175,4 @@ book-data/
 
 *cache.json
 data/
+.DS_Store
