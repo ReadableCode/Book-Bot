@@ -1,0 +1,51 @@
+# book-bot web app's service definition for the elitedesk stack.
+# Pulled into Docker/docker_compose_projects.yaml via `include:`; the include
+# entry sets project_directory to this repo's root, so `context: .` resolves
+# from the repo root and the ${VARS} below interpolate from this repo's .env
+# (a symlink to personal_credentials/personal.env, deployed via the
+# book_bot_env entry in dotfiles/deploy_manifest.yaml). depends_on resolves
+# in the merged compose model: postgres/postgrest stay in the central file,
+# auth comes from the postgrest-auth repo's fragment.
+#
+# Reverse proxied at https://bookbot.tinkernet.me (see server_configs
+# swag/elitedesk/proxy-confs/bookbot.subdomain.conf). Requires book_bot in
+# the central file's PGRST_DB_SCHEMAS list.
+services:
+  book-bot:
+    image: book_bot_image
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: book_bot
+    command:
+      - uv
+      - run
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8010"
+    environment:
+      # App talks to Postgres ONLY through PostgREST + the shared auth service.
+      POSTGREST_URL: http://postgrest:3000
+      AUTH_URL: http://auth:8000
+      APP_SCHEMA: book_bot
+      # Same secret PostgREST/auth use, so the backend can verify the tokens
+      # it forwards.
+      JWT_SECRET: ${POSTGREST_JWT_SECRET}
+      # POSTGRES_* kept so the container's entrypoint can run
+      # scripts/init_db.py (idempotent schema/role setup connects to Postgres
+      # directly) before uvicorn starts — book-bot's alembic-upgrade-head.
+      POSTGRES_URL: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: apps
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    depends_on:
+      - postgres
+      - postgrest
+      - auth
+    ports:
+      - "8010:8010"
+    restart: unless-stopped

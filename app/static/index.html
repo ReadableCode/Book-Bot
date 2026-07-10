@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0d1420">
+  <title>book-bot</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-512.png" type="image/png">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="book-bot">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- login -->
+  <div id="login-screen" class="hidden">
+    <div class="term login-term">
+      <div class="term-bar">
+        <span class="d r"></span><span class="d y"></span><span class="d g"></span>
+        <span class="term-title">you@book-bot: ~</span>
+      </div>
+      <div class="term-body">
+        <div class="login-brand"><span class="prompt">❯</span> book-bot <span class="prompt">//</span> personal library terminal</div>
+        <form id="login-form">
+          <label class="field"><span>username</span>
+            <input id="login-username" autocomplete="username" autocapitalize="none" required>
+          </label>
+          <label class="field"><span>password</span>
+            <input id="login-password" type="password" autocomplete="current-password" required>
+          </label>
+          <div id="login-error" class="form-error hidden"></div>
+          <button class="btn primary wide" type="submit">log in</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- app -->
+  <div id="app" class="hidden">
+    <header class="topbar">
+      <div class="brand"><span class="prompt">❯</span> book-bot</div>
+      <div class="topbar-right">
+        <span id="stat-line" class="stat-line"></span>
+        <button id="logout-btn" class="link-btn" title="log out">log out</button>
+      </div>
+    </header>
+
+    <main id="views">
+
+      <!-- scan -->
+      <section id="view-scan" class="view">
+        <h2><span class="slashes">//</span> scan a barcode</h2>
+        <div class="scan-box">
+          <div id="scanner-wrap" class="scanner-wrap hidden">
+            <video id="scanner-video" playsinline muted></video>
+            <div class="scan-line"></div>
+          </div>
+          <div id="scan-idle" class="scan-idle">
+            <p class="hint">point the camera at the barcode on the back cover.<br>
+              works with isbn barcodes (starting 978/979).</p>
+            <button id="scan-start" class="btn primary wide">start camera</button>
+          </div>
+          <button id="scan-stop" class="btn secondary wide hidden">stop camera</button>
+          <div id="scan-status" class="scan-status"></div>
+        </div>
+        <h2><span class="slashes">//</span> or type the isbn</h2>
+        <form id="manual-form" class="row-form">
+          <input id="manual-code" inputmode="numeric" placeholder="isbn — 10 or 13 digits">
+          <button class="btn primary" type="submit">look up</button>
+        </form>
+      </section>
+
+      <!-- search -->
+      <section id="view-search" class="view hidden">
+        <h2><span class="slashes">//</span> search title or author</h2>
+        <form id="search-form" class="row-form">
+          <input id="search-input" placeholder="e.g. way of kings sanderson" autocapitalize="none">
+          <button class="btn primary" type="submit">search</button>
+        </form>
+        <div id="search-results"></div>
+      </section>
+
+      <!-- library -->
+      <section id="view-library" class="view hidden">
+        <h2><span class="slashes">//</span> library</h2>
+        <input id="library-filter" class="filter-input" placeholder="filter your shelves…">
+        <div id="library-list" class="book-list"></div>
+      </section>
+
+      <!-- wishlist -->
+      <section id="view-wishlist" class="view hidden">
+        <h2><span class="slashes">//</span> wishlist</h2>
+        <input id="wishlist-filter" class="filter-input" placeholder="filter wishlist…">
+        <div id="wishlist-list" class="book-list"></div>
+      </section>
+
+    </main>
+
+    <nav class="bottombar">
+      <button data-view="scan" class="nav-btn active"><span class="nav-icon">▥</span>scan</button>
+      <button data-view="search" class="nav-btn"><span class="nav-icon">⌕</span>search</button>
+      <button data-view="library" class="nav-btn"><span class="nav-icon">▤</span>library</button>
+      <button data-view="wishlist" class="nav-btn"><span class="nav-icon">✩</span>wishlist</button>
+    </nav>
+  </div>
+
+  <!-- bottom sheet for book detail / add -->
+  <div id="sheet-backdrop" class="sheet-backdrop hidden"></div>
+  <div id="sheet" class="sheet hidden"></div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="vendor/zxing.min.js" defer></script>
+  <script src="scanner.js" defer></script>
+  <script src="app.js" defer></script>
+</body>
+</html>

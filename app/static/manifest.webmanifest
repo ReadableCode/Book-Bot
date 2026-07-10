@@ -1,0 +1,13 @@
+{
+  "name": "book-bot",
+  "short_name": "book-bot",
+  "description": "personal library terminal — scan barcodes, track editions and wishlist",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0d1420",
+  "theme_color": "#0d1420",
+  "icons": [
+    { "src": "icons/icon-180.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
