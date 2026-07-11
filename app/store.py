@@ -34,7 +34,7 @@ EDITION_FIELDS = [
     "id", "work_id", "isbn13", "isbn10", "title", "subtitle", "authors",
     "publisher", "published_date", "description", "format", "cover_url",
     "google_volume_id", "ol_edition_key", "page_count", "language",
-    "status", "notes", "copies", "added_at", "status_changed_at",
+    "genre", "status", "notes", "copies", "added_at", "status_changed_at",
 ]
 
 WORK_FIELDS = ["id", "ol_work_key", "norm_key", "title", "authors", "created_at"]
@@ -213,6 +213,7 @@ CREATE TABLE IF NOT EXISTS editions (
     ol_edition_key TEXT,
     page_count INTEGER,
     language TEXT,
+    genre TEXT,
     status TEXT NOT NULL CHECK (status IN ('library', 'wishlist')),
     notes TEXT,
     copies INTEGER NOT NULL DEFAULT 1,
@@ -234,6 +235,13 @@ class SqliteStore:
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(SQLITE_SCHEMA)
         self._conn.commit()
+        self._migrate()
+
+    def _migrate(self):
+        """Bring pre-existing dev databases up to the current schema."""
+        cols = {r["name"] for r in self._rows("PRAGMA table_info(editions)")}
+        if "genre" not in cols:
+            self._exec("ALTER TABLE editions ADD COLUMN genre TEXT")
 
     def _rows(self, query, params=()):
         with self._lock:

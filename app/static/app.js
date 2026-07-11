@@ -127,12 +127,14 @@ $("#logout-btn").addEventListener("click", () => showLogin());
 
 function switchView(name) {
   currentView = name;
+  $("#app").classList.toggle("lib-wide", name === "shelves"); // shelves get room on desktop
   document.querySelectorAll(".view").forEach((v) => v.classList.add("hidden"));
   $(`#view-${name}`).classList.remove("hidden");
   document.querySelectorAll(".nav-btn").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
   if (name !== "scan" && Scanner.isRunning()) stopScanner();
   if (name === "library") loadList("library");
   if (name === "wishlist") loadList("wishlist");
+  if (name === "shelves") Shelf.enter();
 }
 
 document.querySelectorAll(".nav-btn").forEach((btn) =>
