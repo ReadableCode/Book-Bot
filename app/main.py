@@ -35,6 +35,11 @@ class UpdateBookBody(BaseModel):
     notes: str | None = None
     format: str | None = None
     copies: int | None = None
+    genre: str | None = None
+
+
+class EnrichGenresBody(BaseModel):
+    limit: int = 12
 
 
 @app.exception_handler(StoreError)
@@ -125,7 +130,7 @@ def api_lookup(code: str, token: str = Depends(require_token)):
         meta = {k: existing.get(k) for k in (
             "isbn13", "isbn10", "title", "subtitle", "publisher", "published_date",
             "description", "format", "cover_url", "google_volume_id",
-            "ol_edition_key", "page_count", "language")}
+            "ol_edition_key", "page_count", "language", "genre")}
         meta["authors"] = [a.strip() for a in (existing.get("authors") or "").split(",") if a.strip()]
         meta["ol_work_key"] = None
         meta["norm_key"] = None
@@ -213,6 +218,7 @@ def api_add_book(body: AddBookBody, token: str = Depends(require_token)):
         "ol_edition_key": meta.get("ol_edition_key"),
         "page_count": meta.get("page_count"),
         "language": meta.get("language"),
+        "genre": meta.get("genre"),
         "status": body.status,
         "notes": body.notes,
         "copies": 1,
@@ -254,6 +260,8 @@ def api_update_book(edition_id: str, body: UpdateBookBody, token: str = Depends(
         fields["format"] = body.format
     if body.copies is not None:
         fields["copies"] = max(1, body.copies)
+    if body.genre is not None:
+        fields["genre"] = body.genre
     if not fields:
         raise HTTPException(400, "nothing to update")
     updated = get_store().update_edition(token, edition_id, fields)
@@ -269,6 +277,32 @@ def api_delete_book(edition_id: str, token: str = Depends(require_token)):
         raise HTTPException(404, "book not found")
     store.delete_edition(token, edition_id)
     return {"deleted": True}
+
+
+# --------------------------------------------------------------------------
+# genre enrichment
+# --------------------------------------------------------------------------
+
+@app.post("/api/enrich/genres")
+def api_enrich_genres(body: EnrichGenresBody | None = None, token: str = Depends(require_token)):
+    """Backfill genres for editions added before genre support (or whose
+    sources had none). Works in small batches so the frontend can poll
+    until remaining hits 0. Editions no source knows a genre for are
+    marked with '' (tried, unknown) so they aren't retried forever."""
+    limit = max(1, min(30, body.limit if body else 12))
+    store = get_store()
+    # null genre = never tried; '' = tried and unknown (skip those)
+    pending = [e for e in store.list_editions(token) if e.get("genre") is None]
+    pending.sort(key=lambda e: 0 if e.get("status") == "library" else 1)
+    updated = []
+    for edition in pending[:limit]:
+        try:
+            genre = metadata.genre_for_edition(edition) or ""
+        except Exception:
+            genre = ""  # one flaky external lookup shouldn't kill the batch
+        store.update_edition(token, edition["id"], {"genre": genre})
+        updated.append({"id": edition["id"], "genre": genre})
+    return {"updated": updated, "remaining": max(0, len(pending) - len(updated))}
 
 
 @app.get("/api/stats")

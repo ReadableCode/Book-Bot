@@ -35,12 +35,17 @@ CREATE TABLE IF NOT EXISTS book_bot.editions (
     ol_edition_key   text,
     page_count       integer,
     language         text,
+    genre            text,
     status           text NOT NULL CHECK (status IN ('library', 'wishlist')),
     notes            text,
     copies           integer NOT NULL DEFAULT 1,
     added_at         timestamptz NOT NULL DEFAULT now(),
     status_changed_at timestamptz NOT NULL DEFAULT now()
 );
+
+-- added after initial deploys — picks the column up on databases created
+-- before genre existed (no-op on fresh ones).
+ALTER TABLE book_bot.editions ADD COLUMN IF NOT EXISTS genre text;
 
 CREATE INDEX IF NOT EXISTS idx_book_bot_editions_work ON book_bot.editions(work_id);
 CREATE INDEX IF NOT EXISTS idx_book_bot_editions_status ON book_bot.editions(status);

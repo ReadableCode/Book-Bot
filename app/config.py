@@ -31,7 +31,8 @@ if not JWT_SECRET:
 
 JWT_TTL_HOURS = int(os.environ.get("JWT_TTL_HOURS", "720"))  # dev-mode logins
 
-SQLITE_PATH = os.environ.get("SQLITE_PATH", os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "book_bot.db"))
+_DEFAULT_SQLITE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "book_bot.db")
+SQLITE_PATH = os.environ.get("SQLITE_PATH", _DEFAULT_SQLITE)
 
 GOOGLE_BOOKS_API_KEY = os.environ.get("GOOGLE_BOOKS_API_KEY") or None
 
