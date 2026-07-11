@@ -518,8 +518,10 @@ function openBookSheet(meta, ownership, onClose) {
     ${descBlock(meta)}
   `, onClose);
 
-  renderReadSection($("#sheet-read"), ownership.read_state,
-    ownership.work ? { work_id: ownership.work.id } : { metadata: meta });
+  const readPayload = ownership.work ? { work_id: ownership.work.id }
+    : ownership.read_state?.work_id ? { work_id: ownership.read_state.work_id }
+    : { metadata: meta };
+  renderReadSection($("#sheet-read"), ownership.read_state, readPayload);
 
   if (exact) {
     $("#sheet-copy").addEventListener("click", async () => {
@@ -716,7 +718,7 @@ function bindCards(box, data) {
             exact: null,
             related: (meta.owned_editions || []).map((e) => ({ ...e })),
             work: null,
-            read_state: null,
+            read_state: meta.read_state || null,
           });
         }
       }

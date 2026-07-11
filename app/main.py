@@ -374,6 +374,9 @@ def api_search(q: str, auth: AuthContext = Depends(require_auth)):
         m["owned_editions"] = held_by_work.get(str(work["id"]), []) if work else []
         state = read_by_work.get(str(work["id"])) if work else None
         m["read_status"] = state["status"] if state else None
+        # the full state, so the sheet's reading editor starts from what's
+        # saved instead of overwriting it with blanks
+        m["read_state"] = _read_state_public(state)
     return {"local": local, "external": external}
 
 
@@ -387,6 +390,8 @@ def _resolve_edition(auth: AuthContext, meta: dict, fmt: str | None) -> dict:
     if meta.get("isbn13"):
         edition = store.get_edition_by_isbn(auth.token, meta["isbn13"])
         if edition:
+            if fmt and not edition.get("format"):
+                edition = store.update_edition(auth.token, edition["id"], {"format": fmt}) or edition
             return edition
     work = _resolve_work(auth, meta)
     return store.insert_edition(auth.token, {

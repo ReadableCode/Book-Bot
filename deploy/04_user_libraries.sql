@@ -136,9 +136,11 @@ CREATE POLICY members_insert ON book_bot.library_members
         book_bot.is_library_member(library_id)
         OR (user_id = book_bot.jwt_user_id() AND NOT book_bot.library_has_members(library_id))
     );
+-- members may only remove themselves (leave); nobody can strip a shared
+-- library's other members and claim its shelves via the member-less path.
 DROP POLICY IF EXISTS members_delete ON book_bot.library_members;
 CREATE POLICY members_delete ON book_bot.library_members
-    FOR DELETE USING (book_bot.is_library_member(library_id));
+    FOR DELETE USING (user_id = book_bot.jwt_user_id());
 
 DROP POLICY IF EXISTS library_books_all ON book_bot.library_books;
 CREATE POLICY library_books_all ON book_bot.library_books

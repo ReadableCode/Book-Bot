@@ -116,6 +116,17 @@ def test_multiple_editions_and_identical_copies(client, users):
     assert [r["format"] for r in look["ownership"]["related"]] == ["hardcover"]
 
 
+def test_format_backfills_a_formatless_catalog_edition(client, users):
+    jason, beca = users("jason"), users("beca")
+    add_book(client, jason, make_meta("Fmt Book", ISBN_A))  # no format known
+    # beca's separate library adds the same isbn and picks a format: the
+    # user's choice must not be dropped just because the catalog row exists
+    added = add_book(client, beca, make_meta("Fmt Book", ISBN_A), format="paperback")
+    assert added["book"]["format"] == "paperback"
+    # jason's holding shows the enriched catalog format too
+    assert client.get("/api/books", headers=jason).json()["items"][0]["format"] == "paperback"
+
+
 def test_re_adding_same_isbn_updates_instead_of_duplicating(client, users):
     jason = users("jason")
     add_book(client, jason, make_meta("Wish Book", ISBN_C), status="wishlist")
@@ -192,6 +203,25 @@ def test_read_but_not_owned(client, users):
     add_book(client, jason, make_meta("Borrowed From The Library", ISBN_A))
     reads = client.get("/api/reads", headers=jason).json()["items"]
     assert reads[0]["owned"] is True
+
+
+def test_search_annotates_full_read_state(client, users, monkeypatch):
+    """External results carry the saved read state, so the sheet's reading
+    editor starts from it instead of overwriting rating/notes with blanks."""
+    from app import metadata as md
+
+    jason = users("jason")
+    client.post("/api/reads", headers=jason, json={
+        "metadata": make_meta("Loaner"), "status": "read", "rating": 5, "notes": "great"})
+    nk = md.norm_key("Loaner", ["Test Author"])
+    monkeypatch.setattr(md, "search_external", lambda q, limit=12: [
+        {"title": "Loaner", "authors": ["Test Author"], "norm_key": nk, "isbn13": None}])
+
+    ext = client.get("/api/search?q=loaner", headers=jason).json()["external"][0]
+    assert ext["read_status"] == "read"
+    assert ext["read_state"]["rating"] == 5
+    assert ext["read_state"]["notes"] == "great"
+    assert ext["read_state"]["work_id"]
 
 
 def test_read_state_validation(client, users):

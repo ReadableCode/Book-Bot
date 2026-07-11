@@ -107,6 +107,10 @@ class PostgrestStore:
         )
         if resp.status_code == 401:
             raise StoreError("session expired — log in again", 401)
+        if resp.status_code == 400 and "22P02" in resp.text:
+            # malformed uuid in an eq. filter — the row can't exist; match
+            # SqliteStore's not-found behavior instead of surfacing a 502
+            raise StoreError("not found", 404)
         if resp.status_code >= 400:
             raise StoreError(f"database error ({resp.status_code}): {resp.text[:300]}", 502)
         if resp.text:
