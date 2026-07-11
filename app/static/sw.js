@@ -3,10 +3,11 @@
    never cached. Book covers (open library / google books) get their own
    cache-first store so the shelves view stays instant and works offline. */
 
-const CACHE = "book-bot-v2";
+const CACHE = "book-bot-v3";
 const STATIC = [
-  "/", "/style.css", "/app.js", "/scanner.js", "/shelf.js",
+  "/", "/style.css", "/app.js", "/scanner.js", "/shelf.js", "/shelf3d.js",
   "/vendor/zxing.min.js", "/vendor/gsap.min.js", "/vendor/Flip.min.js",
+  "/vendor/three.module.min.js", "/vendor/three.core.min.js",
   "/manifest.webmanifest",
 ];
 

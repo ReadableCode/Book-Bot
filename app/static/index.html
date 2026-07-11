@@ -90,7 +90,7 @@
         <div id="library-list" class="book-list"></div>
       </section>
 
-      <!-- shelves — virtual bookshelf -->
+      <!-- shelves — the 3D library world (DOM bookcase as WebGL fallback) -->
       <section id="view-shelves" class="view hidden">
         <div class="shelves-head">
           <h2><span class="slashes">//</span> my library</h2>
@@ -100,6 +100,9 @@
             <button data-mode="format" class="seg-btn" role="tab" aria-selected="false">type</button>
             <button data-mode="author" class="seg-btn" role="tab" aria-selected="false">author</button>
           </div>
+        </div>
+        <div id="world3d" class="world3d hidden">
+          <div id="world3d-hint" class="world3d-hint">drag to look around · scroll or pinch to zoom · tap a book</div>
         </div>
         <div id="bookcase" class="bookcase"></div>
       </section>
@@ -134,5 +137,6 @@
   <script src="vendor/gsap.min.js" defer></script>
   <script src="vendor/Flip.min.js" defer></script>
   <script src="shelf.js" defer></script>
+  <script src="shelf3d.js" type="module"></script>
 </body>
 </html>

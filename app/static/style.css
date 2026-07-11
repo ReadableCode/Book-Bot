@@ -396,7 +396,40 @@ main#views {
 }
 
 /* the shelves view alone escapes the 640px phone column on big screens */
-#app.lib-wide { max-width: 1140px; }
+#app.lib-wide { max-width: 1400px; }
+
+/* -- the 3D world: a WebGL canvas that fills the view -- */
+
+.world3d {
+  position: relative;
+  height: max(420px, calc(100dvh - 245px - env(safe-area-inset-top) - env(safe-area-inset-bottom)));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: #0a0e16;
+  touch-action: none;      /* the canvas owns all gestures */
+  cursor: grab;
+}
+.world3d:active { cursor: grabbing; }
+.world3d canvas { display: block; width: 100%; height: 100%; }
+
+.world3d-hint {
+  position: absolute;
+  left: 50%; bottom: 14px;
+  transform: translateX(-50%);
+  z-index: 2;
+  pointer-events: none;
+  white-space: nowrap;
+  font-size: .68rem;
+  color: var(--ink-2);
+  background: rgba(13, 20, 32, .72);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: .35rem .8rem;
+  backdrop-filter: blur(6px);
+  transition: opacity .8s ease;
+}
+.world3d-hint.gone { opacity: 0; }
 .bookcase::before {
   content: "";
   position: absolute;

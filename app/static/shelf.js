@@ -1,7 +1,10 @@
-/* shelf.js — the "shelves" tab: a 3D virtual bookcase for the library.
+/* shelf.js — DOM fallback for the "shelves" tab: a CSS 3D virtual bookcase.
    Books are grouped by genre / format / author and GSAP Flip animates them
-   fluidly between groupings. Loads after app.js and reuses its globals
-   (api, esc, authorsOf, openEditionSheet). */
+   fluidly between groupings. The primary renderer is the WebGL world in
+   shelf3d.js; this implementation is used only when WebGL is unavailable
+   (shelf3d.js picks one and owns window.Shelf plus the mode buttons).
+   Loads after app.js and reuses its globals (api, esc, authorsOf,
+   openEditionSheet). */
 
 (() => {
   "use strict";
@@ -368,18 +371,11 @@
     enrichGenres();
   }
 
-  document.querySelectorAll("#shelf-mode .seg-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      if (btn.dataset.mode === mode) return;
-      mode = btn.dataset.mode;
-      document.querySelectorAll("#shelf-mode .seg-btn").forEach((b) => {
-        const on = b === btn;
-        b.classList.toggle("active", on);
-        b.setAttribute("aria-selected", String(on));
-      });
-      regroup(true);
-    });
-  });
+  function setMode(m) {
+    if (m === mode) return;
+    mode = m;
+    regroup(true);
+  }
 
   window.addEventListener("resize", () => {
     if (!books || !books.length || !viewVisible()) return;
@@ -389,5 +385,5 @@
     }, 160);
   });
 
-  window.Shelf = { enter };
+  window.ShelfDOM = { enter, setMode };
 })();
