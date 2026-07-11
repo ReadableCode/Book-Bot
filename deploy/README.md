@@ -48,8 +48,11 @@ docker compose -f docker_compose_projects.yaml up -d --build book-bot
 docker compose -f docker_compose_projects.yaml up -d postgrest   # picks up new PGRST_DB_SCHEMAS
 docker compose -f docker_compose_projects.yaml restart swag      # loads bookbot.subdomain.conf
 
-# create the login (from the Book-Bot repo; uses the .env superuser creds)
-uv run python scripts/create_user.py --username beca --password '...'
+# create the login — run it INSIDE the container, which has the
+# postgrest-mode env (POSTGREST_URL etc.) set by the compose fragment.
+# Running the script from a host shell silently falls back to dev mode
+# and writes to a local SQLite file instead of book_bot.users.
+docker compose -f docker_compose_projects.yaml exec book-bot uv run python scripts/create_user.py --username beca --password '...'
 ```
 
 DNS: `bookbot.tinkernet.me` is covered by the existing `*.tinkernet.me`
