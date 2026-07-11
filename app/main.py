@@ -18,6 +18,19 @@ from .store import StoreError, get_store, new_id, now_iso
 app = FastAPI(title="book-bot", docs_url=None, redoc_url=None)
 
 
+@app.middleware("http")
+async def no_stale_assets(request, call_next):
+    """Static responses must always revalidate. StaticFiles sends no
+    Cache-Control, and Cloudflare edge-caches extension-matched assets
+    (.js/.css/...) for hours when the origin is silent — so deploys served
+    fresh HTML with stale scripts, and the edge handed auth-gated assets to
+    anonymous requests. no-cache keeps ETag/304 revalidation cheap."""
+    response = await call_next(request)
+    if not request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 class LoginBody(BaseModel):
     username: str
     password: str
