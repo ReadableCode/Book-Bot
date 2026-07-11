@@ -161,7 +161,7 @@ async function startScanner() {
     status.textContent = "looking for a barcode…";
   } catch (err) {
     stopScanner();
-    status.textContent = `camera unavailable: ${err.message}. type the isbn below instead.`;
+    status.textContent = `camera unavailable: ${err.message}. type the isbn or upc below instead.`;
   }
 }
 
@@ -197,7 +197,8 @@ async function lookupCode(code, { resumeScannerOnClose = false } = {}) {
     }
     $("#scan-status").textContent = "";
     if (!data.found) {
-      toast(`isbn ${data.isbn13} wasn't found in google books or open library — try a title search`, "err");
+      const what = data.isbn13 ? `isbn ${data.isbn13}` : `barcode ${code}`;
+      toast(`${what} wasn't found in google books or open library — try a title search`, "err");
       if (resumeScannerOnClose) setTimeout(() => Scanner.resume(), 2200);
       return;
     }

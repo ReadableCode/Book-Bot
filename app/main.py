@@ -135,10 +135,20 @@ def api_lookup(code: str, token: str = Depends(require_token)):
     norm = metadata.normalize_code(code)
     if not norm["ok"]:
         return {"ok": False, "reason": norm["reason"]}
-    isbn13 = norm["isbn13"]
     store = get_store()
 
-    existing = store.get_edition_by_isbn(token, isbn13)
+    meta = None
+    if norm.get("upc"):
+        # UPC barcodes don't encode the ISBN — resolve via catalog identifier search
+        meta = metadata.lookup_upc(norm["upc"])
+        if meta is None:
+            return {"ok": True, "isbn13": None, "found": False, "metadata": None,
+                    "ownership": {"exact": None, "related": [], "work": None}}
+        isbn13 = meta.get("isbn13")
+    else:
+        isbn13 = norm["isbn13"]
+
+    existing = store.get_edition_by_isbn(token, isbn13) if isbn13 else None
     if existing:
         meta = {k: existing.get(k) for k in (
             "isbn13", "isbn10", "title", "subtitle", "publisher", "published_date",
@@ -151,7 +161,8 @@ def api_lookup(code: str, token: str = Depends(require_token)):
         return {"ok": True, "isbn13": isbn13, "found": True, "metadata": meta,
                 "ownership": {"exact": existing, "related": related, "work": None}}
 
-    meta = metadata.lookup_isbn(isbn13)
+    if meta is None:
+        meta = metadata.lookup_isbn(isbn13)
     if meta is None:
         return {"ok": True, "isbn13": isbn13, "found": False, "metadata": None,
                 "ownership": {"exact": None, "related": [], "work": None}}
@@ -168,14 +179,19 @@ def api_search(q: str, token: str = Depends(require_token)):
 
     # An ISBN typed into the search box gets a direct lookup — free-text
     # search misses ISBNs for editions the catalogs haven't cross-indexed.
+    # A UPC gets the same treatment via the catalogs' identifier indexes.
     norm = metadata.normalize_code(q)
-    if norm["ok"]:
+    if norm.get("isbn13"):
         q = norm["isbn13"]
     local = store.list_editions(token, q=q)
 
     external = []
-    if norm["ok"]:
+    if norm.get("isbn13"):
         meta = metadata.lookup_isbn(norm["isbn13"])
+        if meta:
+            external = [meta]
+    elif norm.get("upc"):
+        meta = metadata.lookup_upc(norm["upc"])
         if meta:
             external = [meta]
     if not external:
