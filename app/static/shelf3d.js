@@ -691,18 +691,44 @@ import * as THREE from "./vendor/three.module.min.js";
 
   /* ---------- layout: groups -> shelf rows -> bays on an arc ---------- */
 
-  // pack a group's books into rows that fit the bay run; the group's first
-  // covered book is displayed face-out like a bookshop staff pick
+  // pack books into rows that fit the bay run. genre/format modes give each
+  // group its own shelf run (with a face-out staff pick and a plaque);
+  // author mode is one continuous alphabetical run — no shelf-per-author —
+  // with each row labelled by the surname range it spans
   function packRows(groups) {
     const rows = [];
+
+    if (mode === "author") {
+      let row = null;
+      for (const g of groups) {
+        for (const b of g.items) {
+          const s = sizeOf(b);
+          const runW = s.th + BOOK_GAP;
+          if (!row || row.used + runW > BAY.run) {
+            row = { used: 0, books: [], plaque: null };
+            rows.push(row);
+          }
+          row.books.push({ b, s, isFace: false, x: row.used + runW / 2 - BOOK_GAP / 2 });
+          row.used += runW;
+        }
+      }
+      for (const r of rows) {
+        const a = surnameOf(r.books[0].b), z = surnameOf(r.books[r.books.length - 1].b);
+        r.plaque = { text: a === z ? a : `${a} — ${z}`, n: null };
+      }
+      return rows;
+    }
+
     for (const g of groups) {
       const faceOut = g.items.length >= 3 ? g.items.find((b) => b.cover_url) : null;
+      let firstRow = true;
       let row = null;
       const push = (b, isFace) => {
         const s = sizeOf(b);
         const runW = (isFace ? s.w : s.th) + BOOK_GAP;
         if (!row || row.used + runW > BAY.run) {
-          row = { group: g.key, first: !rows.some((r) => r.group === g.key), used: 0, books: [] };
+          row = { used: 0, books: [], plaque: firstRow ? { text: g.key, n: g.items.length } : null };
+          firstRow = false;
           rows.push(row);
         }
         row.books.push({ b, s, isFace, x: row.used + runW / 2 - BOOK_GAP / 2 });
@@ -718,7 +744,13 @@ import * as THREE from "./vendor/three.module.min.js";
   function computeLayout(groups) {
     const rows = packRows(groups);
     const bayCount = Math.max(3, Math.ceil(rows.length / BAY.rows));
-    const perBay = Math.ceil(rows.length / bayCount);   // balance rows so no bay sits empty
+    // spread rows proportionally so every bay gets a share (never 2/2/0)
+    const bayOfRow = rows.map((_, ri) => Math.floor((ri * bayCount) / rows.length));
+    const rowInBayOf = [];
+    {
+      const counters = new Array(bayCount).fill(0);
+      for (const bi of bayOfRow) rowInBayOf.push(counters[bi]++);
+    }
     const step = BAY.w + BAY.gap;
     const maxArc = Math.PI * 1.62;                       // leave an opening behind the camera
     radius = Math.max(2.6, (step * bayCount) / maxArc);
@@ -734,16 +766,15 @@ import * as THREE from "./vendor/three.module.min.js";
 
     const placements = new Map();   // book id -> {pos, quat, out}
     const plaques = [];             // {bay, rowInBay, text, n}
-    const countByGroup = new Map(groups.map((g) => [g.key, g.items.length]));
     const rot90 = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2);
 
     rows.forEach((row, ri) => {
-      const bay = bays[Math.floor(ri / perBay)];
-      const rowInBay = BAY.rows - 1 - (ri % perBay);    // fill from eye level down
+      const bay = bays[bayOfRow[ri]];
+      const rowInBay = BAY.rows - 1 - rowInBayOf[ri];   // fill from eye level down
       const shelfTop = BAY.baseH + rowInBay * BAY.rowH + BAY.shelfT;
       const startX = -row.used / 2;   // center each run in its bay
 
-      if (row.first) plaques.push({ bay, rowInBay, text: row.group, n: countByGroup.get(row.group) });
+      if (row.plaque) plaques.push({ bay, rowInBay, text: row.plaque.text, n: row.plaque.n });
 
       for (const it of row.books) {
         const { b, s, isFace } = it;
@@ -964,6 +995,7 @@ import * as THREE from "./vendor/three.module.min.js";
     buildShell(radius + 2.4);
     buildCases(layout, assets.wood);
     ctrl.maxDist = radius + 1.6;
+    ctrl.tDist = Math.min(ctrl.tDist, ctrl.maxDist);   // a shrinking ring reels the camera back in
 
     const seen = new Set();
     const anim = animate && !reducedMotion();
@@ -993,7 +1025,9 @@ import * as THREE from "./vendor/three.module.min.js";
     }
 
     const n = books.length, s = layout.groupsCount;
-    countEl.textContent = `${n} book${n === 1 ? "" : "s"} · ${s} shel${s === 1 ? "f" : "ves"} · drag to wander`;
+    countEl.textContent = mode === "author"
+      ? `${n} book${n === 1 ? "" : "s"} · a–z by author · drag to wander`
+      : `${n} book${n === 1 ? "" : "s"} · ${s} shel${s === 1 ? "f" : "ves"} · drag to wander`;
 
     if (firstBuild) {
       firstBuild = false;
