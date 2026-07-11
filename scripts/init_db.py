@@ -52,6 +52,11 @@ def main():
             print(f"[init_db] applying deploy/{name}")
             with open(os.path.join(deploy_dir, name)) as f:
                 cur.execute(f.read())
+        # PostgREST caches the schema; without a reload, columns added above
+        # 400 until the container restarts. It listens on the "pgrst" channel
+        # by default.
+        print("[init_db] reloading PostgREST schema cache")
+        cur.execute("NOTIFY pgrst, 'reload schema'")
     conn.close()
     print("[init_db] book_bot schema up to date")
 
