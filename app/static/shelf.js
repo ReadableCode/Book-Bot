@@ -333,27 +333,38 @@
 
   /* ---------- entry / events ---------- */
 
+  // grouping-relevant fingerprint: refresh only re-renders when it changes
+  const sigOf = (list) =>
+    list.map((b) => `${b.id}:${b.genre ?? ""}:${b.format ?? ""}`).sort().join("|");
+
   async function enter() {
     if (loading) return;
-    if (books) {
-      regroup(false); // instant re-seat in case the viewport changed while hidden
-      enrichGenres(); // resume backfill if earlier rounds didn't finish
-      return;
+    const first = !books;
+    if (first) {
+      caseEl.innerHTML = `<div class="empty">loading the shelves…</div>`;
+      countEl.textContent = "";
+    } else {
+      regroup(false); // instant re-seat from cache; the refresh below folds in
     }
     loading = true;
-    caseEl.innerHTML = `<div class="empty">loading the shelves…</div>`;
-    countEl.textContent = "";
+    let fresh;
     try {
       const data = await api("/api/books?status=library");
-      books = data.items || [];
+      fresh = data.items || [];
     } catch (err) {
       loading = false;
-      caseEl.innerHTML = `<div class="empty">couldn't load the library — ${esc(err.message)}</div>`;
+      // a failed refresh keeps showing the cached shelves
+      if (first) caseEl.innerHTML = `<div class="empty">couldn't load the library — ${esc(err.message)}</div>`;
       return;
     }
     loading = false;
-    preloadCovers();
-    regroup(false); // first build cascades in
+    if (first || sigOf(fresh) !== sigOf(books)) {
+      books = fresh;
+      preloadCovers();
+      regroup(!first); // first build cascades in; refreshes glide books around
+    } else {
+      books = fresh;
+    }
     enrichGenres();
   }
 
