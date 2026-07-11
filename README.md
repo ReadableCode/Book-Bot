@@ -37,6 +37,10 @@ inside the cover or searching by title.
   (style-terminal-navy tokens). Barcode scanning via the native
   BarcodeDetector API where available, vendored ZXing elsewhere
   (iPhone Safari). Installable to the home screen.
+- **shelves** — the library tab renders a real-time 3D rotunda
+  (vendored Three.js): wooden bookcases in an arc, each book a physical
+  object textured with its cover, GSAP-driven flights when regrouping by
+  genre / type / author. Falls back to a CSS bookcase without WebGL.
 
 ## run it locally (dev mode, SQLite)
 
