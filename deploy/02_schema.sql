@@ -75,13 +75,14 @@ CREATE TABLE IF NOT EXISTS book_bot.library_members (
 CREATE INDEX IF NOT EXISTS idx_book_bot_members_user ON book_bot.library_members(user_id);
 
 -- a copy (or several identical copies) of an edition on a library's
--- shelf or wishlist. Two different softcover printings are two editions
--- and therefore two rows; two identical softcovers are copies = 2.
+-- shelf ('library'), owned digitally ('digital'), or wanted ('wishlist').
+-- Two different softcover printings are two editions and therefore two
+-- rows; two identical softcovers are copies = 2.
 CREATE TABLE IF NOT EXISTS book_bot.library_books (
     id                uuid PRIMARY KEY,
     library_id        uuid NOT NULL REFERENCES book_bot.libraries(id) ON DELETE CASCADE,
     edition_id        uuid NOT NULL REFERENCES book_bot.editions(id),
-    status            text NOT NULL CHECK (status IN ('library', 'wishlist')),
+    status            text NOT NULL CHECK (status IN ('library', 'wishlist', 'digital')),
     notes             text,
     copies            integer NOT NULL DEFAULT 1,
     added_at          timestamptz NOT NULL DEFAULT now(),

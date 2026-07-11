@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from . import config, metadata
 from .auth import AuthContext, decode_token, login, require_auth
-from .store import READ_STATUSES, StoreError, get_store, new_id, now_iso
+from .store import HOLDING_STATUSES, READ_STATUSES, StoreError, get_store, new_id, now_iso
 
 app = FastAPI(title="book-bot", docs_url=None, redoc_url=None)
 
@@ -29,7 +29,7 @@ class LoginBody(BaseModel):
 
 
 class AddBookBody(BaseModel):
-    status: str  # 'library' | 'wishlist'
+    status: str  # 'library' (physical) | 'digital' | 'wishlist'
     metadata: dict
     format: str | None = None
     notes: str | None = None
@@ -417,8 +417,8 @@ def _resolve_edition(auth: AuthContext, meta: dict, fmt: str | None) -> dict:
 
 @app.post("/api/books")
 def api_add_book(body: AddBookBody, auth: AuthContext = Depends(require_auth)):
-    if body.status not in ("library", "wishlist"):
-        raise HTTPException(400, "status must be 'library' or 'wishlist'")
+    if body.status not in HOLDING_STATUSES:
+        raise HTTPException(400, f"status must be one of {', '.join(HOLDING_STATUSES)}")
     meta = body.metadata or {}
     if not (meta.get("title") or "").strip():
         raise HTTPException(400, "a title is required")
@@ -450,8 +450,8 @@ def api_add_book(body: AddBookBody, auth: AuthContext = Depends(require_auth)):
 @app.get("/api/books")
 def api_list_books(status: str | None = None, q: str | None = None,
                    library_id: str | None = None, auth: AuthContext = Depends(require_auth)):
-    if status not in (None, "library", "wishlist"):
-        raise HTTPException(400, "status must be 'library' or 'wishlist'")
+    if status is not None and status not in HOLDING_STATUSES:
+        raise HTTPException(400, f"status must be one of {', '.join(HOLDING_STATUSES)}")
     library_ids = [_target_library(auth, library_id)] if library_id else _library_ids(auth)
     items = [_flatten_book(h) for h in
              get_store().list_library_books(auth.token, library_ids, status=status)]
@@ -485,8 +485,8 @@ def api_update_book(book_id: str, body: UpdateBookBody, auth: AuthContext = Depe
     store = get_store()
     fields = {}
     if body.status is not None:
-        if body.status not in ("library", "wishlist"):
-            raise HTTPException(400, "status must be 'library' or 'wishlist'")
+        if body.status not in HOLDING_STATUSES:
+            raise HTTPException(400, f"status must be one of {', '.join(HOLDING_STATUSES)}")
         fields["status"] = body.status
         fields["status_changed_at"] = now_iso()
     if body.notes is not None:
@@ -538,12 +538,18 @@ def api_list_reads(status: str | None = None, auth: AuthContext = Depends(requir
     for s in states:
         work = s.get("work") or {}
         held = held_by_work.get(str(s["work_id"]), [])
+        owned_physical = any(h["status"] == "library" for h in held)
+        owned_digital = any(h["status"] == "digital" for h in held)
         items.append({
             **(_read_state_public(s) or {}),
             "title": work.get("title"),
             "authors": work.get("authors"),
             "cover_url": work.get("cover_url"),
-            "owned": any(h["status"] == "library" for h in held),
+            "owned": owned_physical or owned_digital,
+            # trophy-hunt distinction: read on a kindle or borrowed from the
+            # library ≠ a copy on the shelf
+            "owned_physical": owned_physical,
+            "owned_digital": owned_digital,
             "owned_editions": held,
         })
     return {"items": items}
@@ -605,11 +611,11 @@ def api_delete_read(work_id: str, auth: AuthContext = Depends(require_auth)):
 def api_stats(auth: AuthContext = Depends(require_auth)):
     store = get_store()
     holdings = store.list_library_books(auth.token, _library_ids(auth))
-    owned = [h for h in holdings if h["status"] == "library"]
     states = store.read_states_for_user(auth.token, auth.user_id)
     return {
-        "library": len(owned),
-        "wishlist": len(holdings) - len(owned),
+        "library": sum(1 for h in holdings if h["status"] == "library"),
+        "digital": sum(1 for h in holdings if h["status"] == "digital"),
+        "wishlist": sum(1 for h in holdings if h["status"] == "wishlist"),
         "works": len({(h.get("edition") or {}).get("work_id") for h in holdings}),
         "read": sum(1 for s in states if s["status"] == "read"),
     }

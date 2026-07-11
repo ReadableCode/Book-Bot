@@ -19,6 +19,7 @@
   --green-bright: #56d364;
   --amber: #b8860b;
   --amber-bright: #e3b341;
+  --blue-bright: #79c0ff;
 
   /* terminal dots */
   --dot-red: #f87171;
@@ -237,6 +238,7 @@ main#views {
 }
 .chip.ok { color: var(--green-bright); border-color: rgba(86, 211, 100, .4); }
 .chip.warn { color: var(--amber-bright); border-color: rgba(227, 179, 65, .4); }
+.chip.dig { color: var(--blue-bright); border-color: rgba(121, 192, 255, .4); }
 
 .empty { color: var(--muted); font-size: .8rem; padding: 1rem .2rem; line-height: 1.6; }
 
@@ -279,6 +281,7 @@ main#views {
 }
 .own-banner.ok { border-color: rgba(86, 211, 100, .45); color: var(--green-bright); }
 .own-banner.warn { border-color: rgba(227, 179, 65, .45); color: var(--amber-bright); }
+.own-banner.dig { border-color: rgba(121, 192, 255, .45); color: var(--blue-bright); }
 .own-banner.none { color: var(--muted); }
 .own-banner ul { list-style: none; margin-top: .3rem; }
 .own-banner li { color: var(--ink-2); }
@@ -346,6 +349,7 @@ main#views {
 }
 .chip-btn.active { color: var(--green-bright); border-color: rgba(86, 211, 100, .45); }
 
+.status-row .chip-toggle,
 .read-status-row .chip-toggle {
   background: var(--surface-2);
   color: var(--ink-2);
@@ -353,6 +357,7 @@ main#views {
   font-size: .74rem;
   padding: .5rem .3rem;
 }
+.status-row .chip-toggle.active,
 .read-status-row .chip-toggle.active {
   color: var(--green-bright);
   border-color: rgba(86, 211, 100, .45);

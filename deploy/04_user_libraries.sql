@@ -17,6 +17,12 @@
 -- (02_schema.sql includes it on fresh installs).
 ALTER TABLE book_bot.works ADD COLUMN IF NOT EXISTS cover_url text;
 
+-- widen the holding-status CHECK to include 'digital' on databases created
+-- before it existed (the DROP+ADD pair is idempotent).
+ALTER TABLE book_bot.library_books DROP CONSTRAINT IF EXISTS library_books_status_check;
+ALTER TABLE book_bot.library_books ADD CONSTRAINT library_books_status_check
+    CHECK (status IN ('library', 'wishlist', 'digital'));
+
 -- ---------------------------------------------------------------------
 -- 1. data migration from the single-library schema
 -- ---------------------------------------------------------------------
@@ -36,7 +42,10 @@ BEGIN
         INSERT INTO book_bot.library_books
             (id, library_id, edition_id, status, notes, copies, added_at, status_changed_at)
             SELECT gen_random_uuid(), shared_library, id,
-                   status, notes, copies, added_at, status_changed_at
+                   -- an owned ebook/audiobook is by definition owned digitally
+                   CASE WHEN status = 'library' AND format IN ('ebook', 'audiobook')
+                        THEN 'digital' ELSE status END,
+                   notes, copies, added_at, status_changed_at
             FROM book_bot.editions;
         ALTER TABLE book_bot.editions DROP COLUMN status;
         ALTER TABLE book_bot.editions DROP COLUMN notes;

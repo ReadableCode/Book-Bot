@@ -5,6 +5,8 @@
 
 const FORMATS = ["hardcover", "paperback", "mass market", "special edition", "ebook", "audiobook", "other"];
 const READ_LABELS = { want_to_read: "✩ want to read", reading: "◉ reading", read: "✓ read" };
+const HOLD_CHIPS = { library: "✓ library", digital: "⌁ digital", wishlist: "✩ wishlist" };
+const HOLD_PHRASES = { library: "in library", digital: "owned digitally", wishlist: "on wishlist" };
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -80,9 +82,8 @@ function authorsOf(x) {
 }
 
 function statusChip(status) {
-  return status === "library"
-    ? `<span class="chip ok">✓ library</span>`
-    : `<span class="chip warn">✩ wishlist</span>`;
+  const cls = { library: "ok", digital: "dig", wishlist: "warn" }[status] || "";
+  return `<span class="chip ${cls}">${HOLD_CHIPS[status] || esc(status)}</span>`;
 }
 
 function readChip(status) {
@@ -261,7 +262,7 @@ $("#library-btn").addEventListener("click", openLibrarySheet);
 async function refreshStats() {
   try {
     const s = await api("/api/stats");
-    $("#stat-line").textContent = `${s.library} owned · ${s.wishlist} wished · ${s.read} read`;
+    $("#stat-line").textContent = `${s.library + s.digital} owned · ${s.wishlist} wished · ${s.read} read`;
   } catch { /* non-fatal */ }
 }
 
@@ -351,7 +352,7 @@ function libraryName(id) {
 function holdingLine(e) {
   const where = me && me.libraries.length > 1 && e.library_id ? ` — ${esc(libraryName(e.library_id))}` : "";
   const copies = e.copies > 1 ? ` ×${e.copies}` : "";
-  return `${esc(e.format || "unknown format")}${copies} — ${e.status === "library" ? "in library" : "on wishlist"}${e.isbn13 ? ` (${esc(e.isbn13)})` : ""}${where}`;
+  return `${esc(e.format || "unknown format")}${copies} — ${HOLD_PHRASES[e.status] || esc(e.status)}${e.isbn13 ? ` (${esc(e.isbn13)})` : ""}${where}`;
 }
 
 function ownershipBanner(ownership) {
@@ -363,11 +364,13 @@ function ownershipBanner(ownership) {
     ? `<div class="read-line">${READ_LABELS[rs.status]}${rs.finished_at ? ` · finished ${fmtDate(rs.finished_at)}` : ""}${rs.rating ? ` · ${"★".repeat(rs.rating)}` : ""}</div>`
     : "";
   if (exact) {
-    const cls = exact.status === "library" ? "ok" : "warn";
+    const cls = { library: "ok", digital: "dig", wishlist: "warn" }[exact.status];
     const copies = exact.copies > 1 ? ` ×${exact.copies}` : "";
     const label = exact.status === "library"
       ? `✓ this exact edition is in ${esc(libraryName(exact.library_id) || "the library")}${exact.format ? ` (${esc(exact.format)}${copies})` : copies}`
-      : `✩ this exact edition is on the wishlist`;
+      : exact.status === "digital"
+        ? `⌁ you own this edition digitally`
+        : `✩ this exact edition is on the wishlist`;
     const more = related.length ? `<div>other editions you have:</div>${relatedList}` : "";
     return `<div class="own-banner ${cls}">${label}${more}${readLine}</div>`;
   }
@@ -489,17 +492,30 @@ function renderReadSection(container, rs, payloadBase) {
   }
 }
 
+function statusSwitcher(current) {
+  return `<div class="btnrow status-row">${Object.entries(HOLD_CHIPS).map(([v, label]) =>
+    `<button class="btn chip-toggle ${v === current ? "active" : ""}" data-set-status="${v}">${label}</button>`).join("")}</div>`;
+}
+
+function bindStatusSwitcher(bookId, current) {
+  document.querySelectorAll("#sheet [data-set-status]").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      const next = btn.dataset.setStatus;
+      if (next === current) return;
+      await patchBook(bookId, { status: next }, `moved to ${HOLD_PHRASES[next]}`);
+      closeSheet();
+    }));
+}
+
 /* add-mode sheet: a book found by scan/search that may or may not be owned */
 function openBookSheet(meta, ownership, onClose) {
   const exact = ownership.exact;
   let actions;
   if (exact) {
     actions = `
+      ${statusSwitcher(exact.status)}
       <div class="btnrow">
         <button class="btn secondary" id="sheet-copy">+ another copy</button>
-        <button class="btn secondary" id="sheet-flip">${exact.status === "library" ? "move to wishlist" : "move to library"}</button>
-      </div>
-      <div class="btnrow">
         <button class="btn danger" id="sheet-delete">remove</button>
       </div>`;
   } else {
@@ -507,6 +523,7 @@ function openBookSheet(meta, ownership, onClose) {
       <label class="field"><span>edition format</span>${formatSelect("sheet-format", meta.format)}</label>
       <div class="btnrow">
         <button class="btn primary" id="sheet-add-library">+ library</button>
+        <button class="btn secondary" id="sheet-add-digital">+ digital</button>
         <button class="btn secondary" id="sheet-add-wishlist">+ wishlist</button>
       </div>`;
   }
@@ -528,11 +545,7 @@ function openBookSheet(meta, ownership, onClose) {
       await patchBook(exact.id, { copies: (exact.copies || 1) + 1 }, `now ${(exact.copies || 1) + 1} copies ✓`);
       closeSheet();
     });
-    $("#sheet-flip").addEventListener("click", async () => {
-      const next = exact.status === "library" ? "wishlist" : "library";
-      await patchBook(exact.id, { status: next }, `moved to ${next}`);
-      closeSheet();
-    });
+    bindStatusSwitcher(exact.id, exact.status);
     bindDelete($("#sheet-delete"), exact.id);
   } else {
     const add = (status) => async () => {
@@ -542,13 +555,14 @@ function openBookSheet(meta, ownership, onClose) {
           method: "POST",
           body: JSON.stringify({ status, metadata: meta, format: fmt, library_id: activeLibraryId || null }),
         });
-        toast(res.existed ? `already saved — status set to ${status}` : `added to ${status} ✓`, "ok");
+        toast(res.existed ? `already saved — now ${HOLD_PHRASES[status]}` : `added — ${HOLD_PHRASES[status]} ✓`, "ok");
         refreshStats();
         invalidateBooks();
         closeSheet();
       } catch (err) { toast(err.message, "err"); }
     };
     $("#sheet-add-library").addEventListener("click", add("library"));
+    $("#sheet-add-digital").addEventListener("click", add("digital"));
     $("#sheet-add-wishlist").addEventListener("click", add("wishlist"));
   }
 }
@@ -566,13 +580,17 @@ async function openEditionSheet(bookId) {
         `<li>${holdingLine(e)}</li>`).join("")}</ul></div>`
     : "";
   const where = me && me.libraries.length > 1 ? ` in ${esc(libraryName(book.library_id))}` : "";
+  const bannerCls = { library: "ok", digital: "dig", wishlist: "warn" }[book.status];
+  const bannerLabel = book.status === "library" ? `✓ in library${where}`
+    : book.status === "digital" ? `⌁ owned digitally${where}` : `✩ on wishlist${where}`;
   openSheet(`
     ${sheetHead(book)}
-    <div class="own-banner ${book.status === "library" ? "ok" : "warn"}">
-      ${book.status === "library" ? `✓ in library${where}` : `✩ on wishlist${where}`} since ${fmtDate(book.status_changed_at)}
+    <div class="own-banner ${bannerCls}">
+      ${bannerLabel} since ${fmtDate(book.status_changed_at)}
     </div>
     ${relatedHtml}
     <div class="sheet-actions">
+      ${statusSwitcher(book.status)}
       <label class="field"><span>edition format</span>${formatSelect("edit-format", book.format)}</label>
       <label class="field"><span>copies of this exact edition</span>
         <div class="copies-row">
@@ -584,10 +602,7 @@ async function openEditionSheet(bookId) {
         <textarea id="edit-notes" rows="2" placeholder="signed copy, loaned to mom, …">${esc(book.notes || "")}</textarea></label>
       <div class="btnrow">
         <button class="btn primary" id="edit-save">save</button>
-        <button class="btn secondary" id="edit-flip">${book.status === "library" ? "move to wishlist" : "move to library"}</button>
-      </div>
-      <div class="btnrow">
-        <button class="btn danger" id="edit-delete">remove from ${book.status}</button>
+        <button class="btn danger" id="edit-delete">remove</button>
       </div>
     </div>
     <div id="sheet-read"></div>
@@ -609,11 +624,7 @@ async function openEditionSheet(bookId) {
     }, "saved ✓");
     closeSheet();
   });
-  $("#edit-flip").addEventListener("click", async () => {
-    const next = book.status === "library" ? "wishlist" : "library";
-    await patchBook(book.id, { status: next }, `moved to ${next}`);
-    closeSheet();
-  });
+  bindStatusSwitcher(book.id, book.status);
   bindDelete($("#edit-delete"), book.id);
 }
 
@@ -728,26 +739,35 @@ function bindCards(box, data) {
 
 /* ---------- library / wishlist ---------- */
 
-async function loadList(status) {
-  const box = $(`#${status === "library" ? "library" : "wishlist"}-list`);
-  if (!listCache[status].length) {
+let ownFilter = ""; // '' = all owned | 'library' (physical) | 'digital'
+
+async function loadList(view) {
+  const box = $(`#${view}-list`);
+  if (!listCache[view].length) {
     box.innerHTML = `<div class="empty">loading…</div>`;
     try {
-      const lib = activeLibraryId ? `&library_id=${encodeURIComponent(activeLibraryId)}` : "";
-      const data = await api(`/api/books?status=${status}${lib}`);
-      listCache[status] = data.items;
+      // the library view spans both owned states; wishlist stays its own list
+      const params = new URLSearchParams();
+      if (view === "wishlist") params.set("status", "wishlist");
+      if (activeLibraryId) params.set("library_id", activeLibraryId);
+      const data = await api(`/api/books?${params}`);
+      listCache[view] = view === "wishlist" ? data.items
+        : data.items.filter((b) => b.status !== "wishlist");
     } catch (err) {
       box.innerHTML = `<div class="empty">${esc(err.message)}</div>`;
       return;
     }
   }
-  renderList(status);
+  renderList(view);
 }
 
-function renderList(status) {
-  const box = $(`#${status === "library" ? "library" : "wishlist"}-list`);
-  const filter = $(`#${status === "library" ? "library" : "wishlist"}-filter`).value.trim().toLowerCase();
-  let items = listCache[status];
+function renderList(view) {
+  const box = $(`#${view}-list`);
+  const filter = $(`#${view}-filter`).value.trim().toLowerCase();
+  let items = listCache[view];
+  if (view === "library" && ownFilter) {
+    items = items.filter((ed) => ed.status === ownFilter);
+  }
   if (filter) {
     items = items.filter((ed) =>
       (ed.title || "").toLowerCase().includes(filter) ||
@@ -755,7 +775,7 @@ function renderList(status) {
       (ed.isbn13 || "").includes(filter));
   }
   if (!items.length) {
-    box.innerHTML = `<div class="empty">${filter ? "nothing matches that filter" : status === "library" ? "no books yet — scan a barcode to start shelving" : "wishlist is empty — scan or search while shopping"}</div>`;
+    box.innerHTML = `<div class="empty">${filter || ownFilter ? "nothing matches that filter" : view === "library" ? "no books yet — scan a barcode to start shelving" : "wishlist is empty — scan or search while shopping"}</div>`;
     return;
   }
   box.innerHTML = items.map((ed) => bookCardHtml(ed, "local")).join("");
@@ -765,6 +785,14 @@ function renderList(status) {
 
 $("#library-filter").addEventListener("input", () => renderList("library"));
 $("#wishlist-filter").addEventListener("input", () => renderList("wishlist"));
+
+document.querySelectorAll("#own-filters .chip-btn").forEach((btn) =>
+  btn.addEventListener("click", () => {
+    ownFilter = btn.dataset.filter;
+    document.querySelectorAll("#own-filters .chip-btn").forEach((b) =>
+      b.classList.toggle("active", b === btn));
+    renderList("library");
+  }));
 
 /* ---------- reading history ---------- */
 
@@ -786,23 +814,27 @@ async function loadReads() {
 function renderReads() {
   const box = $("#read-list");
   let items = readCache || [];
-  if (readFilter === "unowned") {
-    items = items.filter((r) => r.status === "read" && !r.owned);
+  if (readFilter === "trophies") {
+    // books you've read but have no physical copy of — candidates for
+    // the shelf, even the ones you own digitally
+    items = items.filter((r) => r.status === "read" && !r.owned_physical);
   } else if (readFilter) {
     items = items.filter((r) => r.status === readFilter);
   }
   if (!items.length) {
-    box.innerHTML = `<div class="empty">${readFilter === "unowned"
-      ? "everything you've read is on your shelves"
+    box.innerHTML = `<div class="empty">${readFilter === "trophies"
+      ? "no trophies to hunt — everything you've read is on your shelves"
       : "no reading history yet — open any book and mark it read"}</div>`;
     return;
   }
   box.innerHTML = items.map((r, i) => {
     const chips = [readChip(r.status)];
     if (r.rating) chips.push(`<span class="chip">${"★".repeat(r.rating)}</span>`);
-    chips.push(r.owned
+    chips.push(r.owned_physical
       ? `<span class="chip ok">✓ owned</span>`
-      : `<span class="chip warn">not owned</span>`);
+      : r.owned_digital
+        ? `<span class="chip dig">⌁ digital only</span>`
+        : `<span class="chip warn">not owned</span>`);
     const dates = [r.started_at && `started ${fmtDate(r.started_at)}`, r.finished_at && `finished ${fmtDate(r.finished_at)}`]
       .filter(Boolean).join(" · ");
     return `
@@ -821,15 +853,45 @@ function renderReads() {
 }
 
 function openReadSheet(item) {
+  const bannerCls = item.owned_physical ? "ok" : item.owned_digital ? "dig" : "warn";
   const ownedHtml = item.owned_editions.length
-    ? `<div class="own-banner ok">on your shelves:<ul>${item.owned_editions.map((e) =>
+    ? `<div class="own-banner ${bannerCls}">you have:<ul>${item.owned_editions.map((e) =>
         `<li>${holdingLine(e)}</li>`).join("")}</ul></div>`
     : `<div class="own-banner none">you don't own a copy — search or scan to add one</div>`;
+  // read but no physical copy = trophy candidate (unless already wanted)
+  const wantTrophy = !item.owned_physical
+    && !item.owned_editions.some((e) => e.status === "wishlist");
+  const trophyBtn = wantTrophy
+    ? `<div class="btnrow"><button class="btn secondary" id="read-trophy">🏆 want it on the shelf — + wishlist</button></div>`
+    : "";
   openSheet(`
     ${sheetHead(item)}
     ${ownedHtml}
+    ${trophyBtn}
     <div id="sheet-read"></div>
   `);
+  if (wantTrophy) {
+    $("#read-trophy").addEventListener("click", async () => {
+      try {
+        await api("/api/books", {
+          method: "POST",
+          body: JSON.stringify({
+            status: "wishlist",
+            metadata: {
+              title: item.title,
+              authors: (item.authors || "").split(",").map((a) => a.trim()).filter(Boolean),
+              cover_url: item.cover_url,
+            },
+            library_id: activeLibraryId || null,
+          }),
+        });
+        toast("on the wishlist — happy hunting 🏆", "ok");
+        refreshStats();
+        invalidateBooks();
+        closeSheet();
+      } catch (err) { toast(err.message, "err"); }
+    });
+  }
   renderReadSection($("#sheet-read"), item, { work_id: item.work_id });
 }
 

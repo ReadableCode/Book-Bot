@@ -108,12 +108,57 @@ def test_multiple_editions_and_identical_copies(client, users):
     # both editions share one work
     assert len({i["work_id"] for i in items}) == 1
     assert client.get("/api/stats", headers=jason).json() == {
-        "library": 2, "wishlist": 0, "works": 1, "read": 0}
+        "library": 2, "digital": 0, "wishlist": 0, "works": 1, "read": 0}
 
     # scanning the paperback again: exact hit + the hardcover as related
     look = client.get(f"/api/lookup?code={ISBN_B}", headers=jason).json()
     assert look["ownership"]["exact"]["copies"] == 2
     assert [r["format"] for r in look["ownership"]["related"]] == ["hardcover"]
+
+
+def test_digital_ownership_state(client, users):
+    jason = users("jason")
+    add_book(client, jason, make_meta("Kindle Book", ISBN_A, fmt="ebook"), status="digital")
+    add_book(client, jason, make_meta("Paper Book", ISBN_B))
+
+    digital = client.get("/api/books?status=digital", headers=jason).json()["items"]
+    assert [i["title"] for i in digital] == ["Kindle Book"]
+    stats = client.get("/api/stats", headers=jason).json()
+    assert stats["library"] == 1 and stats["digital"] == 1
+
+    # a digital copy can be promoted to the physical shelf
+    resp = client.patch(f"/api/books/{digital[0]['id']}", headers=jason, json={"status": "library"})
+    assert resp.json()["book"]["status"] == "library"
+    assert client.get("/api/stats", headers=jason).json()["digital"] == 0
+
+    # unknown statuses are rejected everywhere
+    resp = client.post("/api/books", headers=jason,
+                       json={"status": "floppy-disk", "metadata": make_meta("X")})
+    assert resp.status_code == 400
+    assert client.get("/api/books?status=floppy-disk", headers=jason).status_code == 400
+
+
+def test_trophies_read_but_no_physical_copy(client, users):
+    jason = users("jason")
+    # read on a kindle: owned digitally, no physical copy → trophy candidate
+    digital = add_book(client, jason, make_meta("Kindle Read", ISBN_A), status="digital")["book"]
+    client.post("/api/reads", headers=jason, json={"work_id": digital["work_id"], "status": "read"})
+    # read a borrowed book: not owned at all → trophy candidate
+    client.post("/api/reads", headers=jason, json={
+        "metadata": make_meta("Borrowed Read"), "status": "read"})
+    # read and shelved: not a trophy
+    shelved = add_book(client, jason, make_meta("Shelf Read", ISBN_B))["book"]
+    client.post("/api/reads", headers=jason, json={"work_id": shelved["work_id"], "status": "read"})
+
+    reads = {r["title"]: r for r in client.get("/api/reads", headers=jason).json()["items"]}
+    kindle, borrowed, shelf = reads["Kindle Read"], reads["Borrowed Read"], reads["Shelf Read"]
+    assert kindle["owned_digital"] and not kindle["owned_physical"] and kindle["owned"]
+    assert not borrowed["owned_digital"] and not borrowed["owned_physical"] and not borrowed["owned"]
+    assert shelf["owned_physical"] and shelf["owned"]
+    # the trophy filter (read + no physical copy) is applied client-side on
+    # exactly these two flags
+    trophies = [r for r in reads.values() if r["status"] == "read" and not r["owned_physical"]]
+    assert {r["title"] for r in trophies} == {"Kindle Read", "Borrowed Read"}
 
 
 def test_format_backfills_a_formatless_catalog_edition(client, users):

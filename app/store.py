@@ -62,6 +62,10 @@ READ_STATE_FIELDS = [
 
 READ_STATUSES = ("want_to_read", "reading", "read")
 
+# 'library' = physical copy on the shelf; 'digital' = owned as
+# ebook/audiobook/file; 'wishlist' = wanted.
+HOLDING_STATUSES = ("library", "digital", "wishlist")
+
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -369,7 +373,7 @@ CREATE TABLE IF NOT EXISTS library_books (
     id TEXT PRIMARY KEY,
     library_id TEXT NOT NULL REFERENCES libraries(id),
     edition_id TEXT NOT NULL REFERENCES editions(id),
-    status TEXT NOT NULL CHECK (status IN ('library', 'wishlist')),
+    status TEXT NOT NULL CHECK (status IN ('library', 'wishlist', 'digital')),
     notes TEXT,
     copies INTEGER NOT NULL DEFAULT 1,
     added_at TEXT NOT NULL,
@@ -440,7 +444,20 @@ class SqliteStore:
             columns = {r["name"] for r in self._conn.execute("PRAGMA table_info(works)")}
             if "cover_url" not in columns:
                 self._conn.execute("ALTER TABLE works ADD COLUMN cover_url TEXT")
+        # a library_books table created before the 'digital' status has a
+        # narrower CHECK; SQLite can't alter constraints, so rebuild it.
+        row = self._conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'library_books'"
+        ).fetchone()
+        rebuild = bool(row and "'digital'" not in row["sql"])
+        if rebuild:
+            self._conn.execute("ALTER TABLE library_books RENAME TO library_books_migr")
         self._conn.executescript(SQLITE_SCHEMA)
+        if rebuild:
+            self._conn.execute("INSERT INTO library_books SELECT * FROM library_books_migr")
+            self._conn.execute("DROP TABLE library_books_migr")
+            # the old table took its indexes with it; recreate them
+            self._conn.executescript(SQLITE_SCHEMA)
         self._conn.commit()
 
     def _migrate_legacy(self):
@@ -459,10 +476,14 @@ class SqliteStore:
                 "INSERT INTO library_members (library_id, user_id, role, added_at) "
                 "SELECT ?, id, 'owner', ? FROM users", (library_id, now_iso()))
             for ed in self._conn.execute("SELECT * FROM editions").fetchall():
+                # an owned ebook/audiobook is by definition owned digitally
+                status = ed["status"]
+                if status == "library" and (ed["format"] or "") in ("ebook", "audiobook"):
+                    status = "digital"
                 self._conn.execute(
                     "INSERT INTO library_books (id, library_id, edition_id, status, notes, "
                     "copies, added_at, status_changed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (new_id(), library_id, ed["id"], ed["status"], ed["notes"],
+                    (new_id(), library_id, ed["id"], status, ed["notes"],
                      ed["copies"], ed["added_at"], ed["status_changed_at"]))
             self._conn.execute(SQLITE_EDITIONS_REBUILD)
             cols = ", ".join(EDITION_FIELDS)

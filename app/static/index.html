@@ -89,6 +89,11 @@
           <h2><span class="slashes">//</span> library</h2>
           <button id="library-btn" class="lib-btn" title="switch / share libraries">▤ …</button>
         </div>
+        <div id="own-filters" class="chips-row">
+          <button class="chip-btn active" data-filter="">all owned</button>
+          <button class="chip-btn" data-filter="library">▤ physical</button>
+          <button class="chip-btn" data-filter="digital">⌁ digital</button>
+        </div>
         <input id="library-filter" class="filter-input" placeholder="filter your shelves…">
         <div id="library-list" class="book-list"></div>
       </section>
@@ -108,7 +113,7 @@
           <button class="chip-btn" data-filter="read">read</button>
           <button class="chip-btn" data-filter="reading">reading</button>
           <button class="chip-btn" data-filter="want_to_read">want to read</button>
-          <button class="chip-btn" data-filter="unowned">read, not owned</button>
+          <button class="chip-btn" data-filter="trophies">🏆 trophies</button>
         </div>
         <div id="read-list" class="book-list"></div>
       </section>

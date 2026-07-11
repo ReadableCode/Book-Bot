@@ -68,6 +68,11 @@ def build_legacy_db(path):
         "status, notes, copies, added_at, status_changed_at) VALUES "
         "('e2', 'w1', '9780000000029', 'The Way of Kings', 'Brandon Sanderson', 'paperback', "
         "'wishlist', NULL, 2, '2025-03-01', '2025-03-01')")
+    conn.execute(
+        "INSERT INTO editions (id, work_id, isbn13, title, authors, format, "
+        "status, notes, copies, added_at, status_changed_at) VALUES "
+        "('e3', 'w1', '9780000000036', 'The Way of Kings', 'Brandon Sanderson', 'ebook', "
+        "'library', NULL, 1, '2025-04-01', '2025-04-01')")
     conn.commit()
     conn.close()
 
@@ -93,6 +98,8 @@ def test_legacy_sqlite_migrates_to_shared_family_library(tmp_path):
     assert by_isbn["9780000000012"]["notes"] == "signed"
     assert by_isbn["9780000000029"]["status"] == "wishlist"
     assert by_isbn["9780000000029"]["copies"] == 2
+    # an owned ebook becomes a digital holding
+    assert by_isbn["9780000000036"]["status"] == "digital"
 
     # editions are pure catalog rows now
     columns = {r["name"] for r in store._conn.execute("PRAGMA table_info(editions)")}
@@ -105,7 +112,39 @@ def test_legacy_sqlite_migrates_to_shared_family_library(tmp_path):
     # opening the same file again is a no-op
     again = store_module.SqliteStore(path)
     assert len(again._rows("SELECT * FROM libraries")) == 1
-    assert len(again.list_library_books(None, [libraries[0]["id"]])) == 2
+    assert len(again.list_library_books(None, [libraries[0]["id"]])) == 3
+
+
+def test_two_state_status_check_is_widened(tmp_path):
+    """Dev databases created before the 'digital' status get their
+    library_books table rebuilt with the wider CHECK, keeping data."""
+    path = str(tmp_path / "twostate.db")
+    old_schema = store_module.SQLITE_SCHEMA.replace(
+        "IN ('library', 'wishlist', 'digital')", "IN ('library', 'wishlist')")
+    assert old_schema != store_module.SQLITE_SCHEMA
+    conn = sqlite3.connect(path)
+    conn.executescript(old_schema)
+    conn.execute("INSERT INTO libraries VALUES ('l1', 'lib', '2026-01-01')")
+    conn.execute(
+        "INSERT INTO works (id, norm_key, title, created_at) VALUES ('w1', 'k', 'T', '2026-01-01')")
+    conn.execute(
+        "INSERT INTO editions (id, work_id, title, added_at) VALUES ('e1', 'w1', 'T', '2026-01-01')")
+    conn.execute(
+        "INSERT INTO editions (id, work_id, title, added_at) VALUES ('e2', 'w1', 'T', '2026-01-01')")
+    conn.execute(
+        "INSERT INTO library_books (id, library_id, edition_id, status, copies, added_at, "
+        "status_changed_at) VALUES ('b1', 'l1', 'e1', 'library', 1, '2026-01-01', '2026-01-01')")
+    conn.commit()
+    conn.close()
+
+    store = store_module.SqliteStore(path)
+    # existing data survived the rebuild
+    assert store.get_library_book(None, "b1")["status"] == "library"
+    # and 'digital' is accepted now
+    store.insert_library_book(None, {
+        "id": "b2", "library_id": "l1", "edition_id": "e2", "status": "digital",
+        "notes": None, "copies": 1, "added_at": "2026-01-02", "status_changed_at": "2026-01-02"})
+    assert store.get_library_book(None, "b2")["status"] == "digital"
 
 
 def test_migrated_users_share_but_new_users_do_not(tmp_path, monkeypatch):
@@ -137,7 +176,7 @@ def test_migrated_users_share_but_new_users_do_not(tmp_path, monkeypatch):
             me = client.get("/api/me", headers=headers).json()
             assert [lib["name"] for lib in me["libraries"]] == ["Family Library"]
             titles = [i["title"] for i in client.get("/api/books", headers=headers).json()["items"]]
-            assert titles == ["The Way of Kings"] * 2
+            assert titles == ["The Way of Kings"] * 3
 
         # a user created after the migration starts from scratch
         store_module.get_store().create_user(

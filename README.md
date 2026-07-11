@@ -19,9 +19,10 @@ catalog plus per-library and per-user layers:
 - **libraries / library_books** — who owns what. A library is a shelf that
   one *or several* users own together (a couple shares one home library);
   a `library_books` row is that library's copy of an edition, with status
-  (`library` / `wishlist`), shared notes, and a `copies` count — so a
-  hardback plus two identical softbacks is two rows (one per edition) with
-  `copies = 2` on the softback.
+  (`library` for a physical copy / `digital` for ebooks & audiobooks /
+  `wishlist`), shared notes, and a `copies` count — so a hardback plus two
+  identical softbacks is two rows (one per edition) with `copies = 2` on
+  the softback.
 - **read_states** — per-user reading history, Goodreads-style: one row per
   user+work with status (`want to read` / `reading` / `read`), rating,
   private notes, and started/finished dates. Independent of ownership, so
@@ -31,6 +32,11 @@ catalog plus per-library and per-user layers:
 So when a scan finds an ISBN that isn't in the database, the app still
 resolves its work and answers: *"not this edition, but you have this book:
 hardcover — in library"* — and *"you read this in 2023 ★★★★"*.
+
+The read tab's **🏆 trophies** filter crosses the two layers: books you've
+*read* but own no *physical* copy of (borrowed, library loans, or
+digital-only), each one a tap away from the wishlist for when you want it
+on the shelf.
 
 The same keys are the future Goodreads-sync seams: a Goodreads export
 matches editions by ISBN-13 (falling back to the work's normalized
