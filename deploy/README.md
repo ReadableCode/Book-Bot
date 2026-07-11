@@ -31,12 +31,38 @@ it runs as a container in the elitedesk stack at
 
 The container entrypoint runs `scripts/init_db.py` before uvicorn starts
 (book-bot's `alembic upgrade head`): it idempotently creates the
-`book_bot_user` role and applies `02_schema.sql` + `03_secure_users.sql`.
-The numbered SQL files remain runnable by hand (`psql -U postgres -d apps
--f ...`) if you prefer; `01_create_role.sql` is the manual, non-idempotent
-equivalent of the role block in init_db.py. The cluster-global roles
-(`postgrest_authenticator`, `web_anon`) must already exist — they do,
-from load-log's setup.
+`book_bot_user` role and applies `02_schema.sql` + `03_secure_users.sql`
++ `04_user_libraries.sql`. The numbered SQL files remain runnable by hand
+(`psql -U postgres -d apps -f ...`) if you prefer; `01_create_role.sql`
+is the manual, non-idempotent equivalent of the role block in init_db.py.
+The cluster-global roles (`postgrest_authenticator`, `web_anon`) must
+already exist — they do, from load-log's setup.
+
+### the multi-user migration (04_user_libraries.sql)
+
+`04_user_libraries.sql` upgrades a pre-multi-user database in one shot,
+the first time it runs: ownership columns (`status`, `notes`, `copies`,
+`status_changed_at`) move off `book_bot.editions` into
+`book_bot.library_books`, inside a single **Family Library** that every
+user existing *at migration time* co-owns. Users created afterwards get
+their own empty library at first login and cannot see the Family Library
+until a member shares it with them (`▤` button in the app's library
+view). The file also installs row-level-security policies keyed on the
+JWT's `user_id` claim, so library membership is enforced by Postgres
+itself even for clients that talk to PostgREST directly.
+
+Two operational notes:
+
+- **JWTs must carry the user's uuid.** The postgrest-auth service must
+  mint the `book_bot.users.id` value as a `user_id` (or `sub`) claim —
+  the dev-mode login already does, and load-log-style tokens do too. A
+  token without it is rejected by the API (clear 401) and matches no RLS
+  policy, so nothing leaks; users just need to log in again after the
+  auth service is updated. Verify with:
+  `psql -c "SET ROLE book_bot_user; SET request.jwt.claims='{\"user_id\":\"<uuid>\"}'; SELECT count(*) FROM book_bot.libraries;"`
+- **Restart PostgREST once after the first deploy** so its schema cache
+  picks up the new tables and the `library_books → editions` /
+  `read_states → works` embeddings.
 
 ## rollout on elitedesk (when ready)
 

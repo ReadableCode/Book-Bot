@@ -3,6 +3,11 @@
 FastAPI backend: serves the mobile-first frontend from app/static and a
 small JSON API. All book data flows through the store layer (PostgREST in
 production, SQLite in dev); metadata comes from Google Books/Open Library.
+
+Shape of the world: works and editions are a shared catalog; ownership
+lives in library_books inside a library that one or more users own
+together; each user additionally has private per-work read states
+(status / rating / notes / read dates), independent of ownership.
 """
 
 import os
@@ -12,8 +17,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import config, metadata
-from .auth import login, require_token
-from .store import StoreError, get_store, new_id, now_iso
+from .auth import AuthContext, decode_token, login, require_auth
+from .store import READ_STATUSES, StoreError, get_store, new_id, now_iso
 
 app = FastAPI(title="book-bot", docs_url=None, redoc_url=None)
 
@@ -28,6 +33,7 @@ class AddBookBody(BaseModel):
     metadata: dict
     format: str | None = None
     notes: str | None = None
+    library_id: str | None = None  # defaults to the user's first library
 
 
 class UpdateBookBody(BaseModel):
@@ -35,6 +41,25 @@ class UpdateBookBody(BaseModel):
     notes: str | None = None
     format: str | None = None
     copies: int | None = None
+
+
+class LibraryBody(BaseModel):
+    name: str
+
+
+class MemberBody(BaseModel):
+    username: str
+
+
+class ReadBody(BaseModel):
+    work_id: str | None = None
+    metadata: dict | None = None  # used to resolve/create the work when no work_id
+    edition_id: str | None = None
+    status: str  # 'want_to_read' | 'reading' | 'read'
+    rating: int | None = None
+    notes: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
 
 
 @app.exception_handler(StoreError)
@@ -48,64 +73,216 @@ def health():
     return {"status": "ok", "mode": config.MODE}
 
 
+# --------------------------------------------------------------------------
+# login + libraries
+# --------------------------------------------------------------------------
+
+def _ensure_libraries(auth: AuthContext, username: str | None = None) -> list[dict]:
+    """A user with no library gets a personal one on the spot. Existing
+    users keep whatever they're a member of (e.g. the migrated shared
+    Family Library) — brand-new users never see anyone else's shelves."""
+    store = get_store()
+    libraries = store.libraries_for_user(auth.token, auth.user_id)
+    if libraries:
+        return libraries
+    if not username:
+        username = store.usernames_for_ids(auth.token, [auth.user_id]).get(str(auth.user_id))
+    name = f"{username}'s library" if username else "My library"
+    library = {"id": new_id(), "name": name, "created_at": now_iso()}
+    store.create_library(auth.token, library)
+    store.add_member(auth.token, {
+        "library_id": library["id"], "user_id": auth.user_id,
+        "role": "owner", "added_at": now_iso(),
+    })
+    return [{**library, "role": "owner"}]
+
+
+def _library_ids(auth: AuthContext) -> list[str]:
+    return [lib["id"] for lib in _ensure_libraries(auth)]
+
+
+def _target_library(auth: AuthContext, library_id: str | None) -> str:
+    libraries = _ensure_libraries(auth)
+    if library_id is None:
+        return libraries[0]["id"]
+    if library_id not in {lib["id"] for lib in libraries}:
+        raise HTTPException(404, "no such library (or you are not a member)")
+    return library_id
+
+
 @app.post("/api/login")
 def api_login(body: LoginBody):
-    return {"token": login(body.username.strip(), body.password)}
+    token = login(body.username.strip(), body.password)
+    _ensure_libraries(decode_token(token), username=body.username.strip())
+    return {"token": token}
+
+
+@app.get("/api/me")
+def api_me(auth: AuthContext = Depends(require_auth)):
+    store = get_store()
+    libraries = _ensure_libraries(auth)
+    members = store.members_for_libraries(auth.token, [lib["id"] for lib in libraries])
+    by_library = {}
+    username = None
+    for m in members:
+        by_library.setdefault(str(m["library_id"]), []).append(
+            {"user_id": str(m["user_id"]), "username": m["username"], "role": m["role"]})
+        if str(m["user_id"]) == str(auth.user_id):
+            username = m["username"]
+    return {
+        "user_id": auth.user_id,
+        "username": username,
+        "libraries": [
+            {**lib, "members": by_library.get(str(lib["id"]), [])} for lib in libraries
+        ],
+    }
+
+
+@app.post("/api/libraries")
+def api_create_library(body: LibraryBody, auth: AuthContext = Depends(require_auth)):
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(400, "a name is required")
+    store = get_store()
+    library = {"id": new_id(), "name": name, "created_at": now_iso()}
+    store.create_library(auth.token, library)
+    store.add_member(auth.token, {
+        "library_id": library["id"], "user_id": auth.user_id,
+        "role": "owner", "added_at": now_iso(),
+    })
+    return {"library": {**library, "role": "owner"}}
+
+
+@app.patch("/api/libraries/{library_id}")
+def api_rename_library(library_id: str, body: LibraryBody, auth: AuthContext = Depends(require_auth)):
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(400, "a name is required")
+    _target_library(auth, library_id)
+    get_store().update_library(auth.token, library_id, {"name": name})
+    return {"renamed": True}
+
+
+@app.post("/api/libraries/{library_id}/members")
+def api_add_member(library_id: str, body: MemberBody, auth: AuthContext = Depends(require_auth)):
+    """Share a library: any current member can add another user by username."""
+    _target_library(auth, library_id)
+    store = get_store()
+    user = store.find_user_by_username(auth.token, body.username.strip())
+    if not user:
+        raise HTTPException(404, f"no user named {body.username.strip()!r}")
+    members = store.members_for_libraries(auth.token, [library_id])
+    if any(str(m["user_id"]) == str(user["id"]) for m in members):
+        raise HTTPException(409, f"{user['username']} is already a member")
+    store.add_member(auth.token, {
+        "library_id": library_id, "user_id": str(user["id"]),
+        "role": "owner", "added_at": now_iso(),
+    })
+    return {"added": user["username"]}
 
 
 # --------------------------------------------------------------------------
 # work resolution + ownership
 # --------------------------------------------------------------------------
 
-def _resolve_work(token: str, meta: dict) -> dict:
+def _resolve_work(auth: AuthContext, meta: dict) -> dict:
     """Find the work this edition belongs to, or create it.
 
     Match order: Open Library work key (authoritative), then normalized
     title+author (catches editions OL doesn't link). Backfills the OL key
-    onto a norm-key-matched work so future scans match directly.
+    and a cover onto matched works so future scans and the read-history
+    view get richer over time.
     """
     store = get_store()
     nkey = meta.get("norm_key") or metadata.norm_key(meta.get("title", ""), meta.get("authors"))
-    work = store.find_work(token, meta.get("ol_work_key"), nkey)
+    work = store.find_work(auth.token, meta.get("ol_work_key"), nkey)
     if work:
+        backfill = {}
         if meta.get("ol_work_key") and not work.get("ol_work_key"):
-            store.update_work(token, work["id"], {"ol_work_key": meta["ol_work_key"]})
-            work["ol_work_key"] = meta["ol_work_key"]
+            backfill["ol_work_key"] = meta["ol_work_key"]
+        if meta.get("cover_url") and not work.get("cover_url"):
+            backfill["cover_url"] = meta["cover_url"]
+        if backfill:
+            store.update_work(auth.token, work["id"], backfill)
+            work.update(backfill)
         return work
-    return store.create_work(token, {
+    return store.create_work(auth.token, {
         "id": new_id(),
         "ol_work_key": meta.get("ol_work_key"),
         "norm_key": nkey,
         "title": (meta.get("title") or "").split(":")[0].strip() or "unknown",
         "authors": ", ".join(meta.get("authors") or []),
+        "cover_url": meta.get("cover_url"),
         "created_at": now_iso(),
     })
 
 
-def _edition_public(row: dict) -> dict:
-    return row
+def _flatten_book(holding: dict) -> dict:
+    """Merge a library_books row with its embedded edition into the flat
+    shape the frontend renders. Holding fields win the name collisions
+    (id, added_at)."""
+    edition = holding.get("edition") or {}
+    flat = {**edition}
+    for key in ("id", "library_id", "edition_id", "status", "notes", "copies",
+                "added_at", "status_changed_at"):
+        if key in holding:
+            flat[key] = holding[key]
+    return flat
 
 
-def _ownership(token: str, meta: dict, exclude_edition_id=None) -> dict:
-    """Everything the shopper needs to know: is this exact ISBN in the
-    library/wishlist, and which *other* editions of the same work exist."""
+def _read_state_public(state: dict | None) -> dict | None:
+    if not state:
+        return None
+    return {k: state.get(k) for k in (
+        "work_id", "edition_id", "status", "rating", "notes",
+        "started_at", "finished_at", "updated_at")}
+
+
+def _ownership(auth: AuthContext, meta: dict, edition=None, work=None, exclude_holding_id=None) -> dict:
+    """Everything the shopper needs to know: is this exact ISBN on one of
+    my shelves, which *other* editions of the same work do my libraries
+    hold, and have I read it."""
     store = get_store()
-    exact = store.get_edition_by_isbn(token, meta["isbn13"]) if meta.get("isbn13") else None
-    nkey = meta.get("norm_key") or metadata.norm_key(meta.get("title", ""), meta.get("authors"))
-    work = store.find_work(token, meta.get("ol_work_key"), nkey)
-    related = []
+    library_ids = _library_ids(auth)
+    if edition is None and meta.get("isbn13"):
+        edition = store.get_edition_by_isbn(auth.token, meta["isbn13"])
+    if work is None:
+        if edition:
+            work = store.get_work(auth.token, edition["work_id"])
+        else:
+            nkey = meta.get("norm_key") or metadata.norm_key(meta.get("title", ""), meta.get("authors"))
+            work = store.find_work(auth.token, meta.get("ol_work_key"), nkey)
+
+    exact, related = None, []
     if work:
-        for ed in store.editions_for_work(token, work["id"]):
-            if exact and ed["id"] == exact["id"]:
+        editions = {e["id"]: e for e in store.editions_for_work(auth.token, work["id"])}
+        holdings = store.holdings_for_editions(auth.token, library_ids, list(editions))
+        for holding in holdings:
+            if exclude_holding_id and holding["id"] == exclude_holding_id:
                 continue
-            if exclude_edition_id and ed["id"] == exclude_edition_id:
-                continue
-            related.append(ed)
+            flat = _flatten_book({**holding, "edition": editions.get(holding["edition_id"])})
+            if exact is None and edition and holding["edition_id"] == edition["id"]:
+                exact = flat
+            else:
+                related.append(flat)
+    read_state = store.get_read_state(auth.token, auth.user_id, work["id"]) if work else None
     return {
         "exact": exact,
         "related": related,
         "work": work,
+        "read_state": _read_state_public(read_state),
     }
+
+
+def _annotate_read_status(auth: AuthContext, items: list[dict]) -> None:
+    """Stamp my read status onto flattened book rows (by work)."""
+    work_ids = list({item["work_id"] for item in items if item.get("work_id")})
+    states = get_store().read_states_for_works(auth.token, auth.user_id, work_ids)
+    by_work = {str(s["work_id"]): s for s in states}
+    for item in items:
+        state = by_work.get(str(item.get("work_id")))
+        item["read_status"] = state["status"] if state else None
+        item["read_rating"] = state["rating"] if state else None
 
 
 # --------------------------------------------------------------------------
@@ -113,47 +290,55 @@ def _ownership(token: str, meta: dict, exclude_edition_id=None) -> dict:
 # --------------------------------------------------------------------------
 
 @app.get("/api/lookup")
-def api_lookup(code: str, token: str = Depends(require_token)):
+def api_lookup(code: str, auth: AuthContext = Depends(require_auth)):
     norm = metadata.normalize_code(code)
     if not norm["ok"]:
         return {"ok": False, "reason": norm["reason"]}
     isbn13 = norm["isbn13"]
     store = get_store()
 
-    existing = store.get_edition_by_isbn(token, isbn13)
+    # the shared catalog doubles as a metadata cache
+    existing = store.get_edition_by_isbn(auth.token, isbn13)
     if existing:
         meta = {k: existing.get(k) for k in (
             "isbn13", "isbn10", "title", "subtitle", "publisher", "published_date",
             "description", "format", "cover_url", "google_volume_id",
             "ol_edition_key", "page_count", "language")}
         meta["authors"] = [a.strip() for a in (existing.get("authors") or "").split(",") if a.strip()]
-        meta["ol_work_key"] = None
-        meta["norm_key"] = None
-        related = [e for e in store.editions_for_work(token, existing["work_id"]) if e["id"] != existing["id"]]
         return {"ok": True, "isbn13": isbn13, "found": True, "metadata": meta,
-                "ownership": {"exact": existing, "related": related, "work": None}}
+                "ownership": _ownership(auth, meta, edition=existing)}
 
     meta = metadata.lookup_isbn(isbn13)
     if meta is None:
         return {"ok": True, "isbn13": isbn13, "found": False, "metadata": None,
-                "ownership": {"exact": None, "related": [], "work": None}}
+                "ownership": {"exact": None, "related": [], "work": None, "read_state": None}}
     return {"ok": True, "isbn13": isbn13, "found": True, "metadata": meta,
-            "ownership": _ownership(token, meta)}
+            "ownership": _ownership(auth, meta)}
+
+
+def _matches_query(item: dict, q: str) -> bool:
+    if q.isdigit():
+        return item.get("isbn13") == q or q in (item.get("title") or "")
+    haystack = f"{item.get('title') or ''} {item.get('authors') or ''}".lower()
+    return all(term in haystack for term in q.lower().split())
 
 
 @app.get("/api/search")
-def api_search(q: str, token: str = Depends(require_token)):
+def api_search(q: str, auth: AuthContext = Depends(require_auth)):
     q = q.strip()
     if not q:
         return {"local": [], "external": []}
     store = get_store()
+    library_ids = _library_ids(auth)
 
     # An ISBN typed into the search box gets a direct lookup — free-text
     # search misses ISBNs for editions the catalogs haven't cross-indexed.
     norm = metadata.normalize_code(q)
     if norm["ok"]:
         q = norm["isbn13"]
-    local = store.list_editions(token, q=q)
+    local = [_flatten_book(h) for h in store.list_library_books(auth.token, library_ids)]
+    local = [item for item in local if _matches_query(item, q)]
+    _annotate_read_status(auth, local)
 
     external = []
     if norm["ok"]:
@@ -162,56 +347,52 @@ def api_search(q: str, token: str = Depends(require_token)):
             external = [meta]
     if not external:
         external = metadata.search_external(q)
-    # annotate external results with what's already on the shelves
+
+    # annotate external results with what's already on my shelves + read
     nkeys = [m["norm_key"] for m in external if m.get("norm_key")]
     olkeys = [m["ol_work_key"] for m in external if m.get("ol_work_key")]
-    works = store.works_by_norm_keys(token, nkeys, olkeys)
+    works = store.works_by_norm_keys(auth.token, nkeys, olkeys)
     works_by_nkey = {w["norm_key"]: w for w in works}
     works_by_ol = {w["ol_work_key"]: w for w in works if w.get("ol_work_key")}
-    eds = store.editions_for_works(token, [w["id"] for w in works])
-    eds_by_work = {}
-    for ed in eds:
-        eds_by_work.setdefault(ed["work_id"], []).append(ed)
-    local_isbns = {ed["isbn13"] for ed in eds if ed.get("isbn13")}
+    editions = store.editions_for_works(auth.token, [w["id"] for w in works])
+    holdings = store.holdings_for_editions(auth.token, library_ids, [e["id"] for e in editions])
+    editions_by_id = {e["id"]: e for e in editions}
+    held_by_work = {}
+    held_isbns = set()
+    for h in holdings:
+        edition = editions_by_id.get(h["edition_id"]) or {}
+        held_by_work.setdefault(str(edition.get("work_id")), []).append(
+            {"id": h["id"], "format": edition.get("format"), "status": h["status"],
+             "isbn13": edition.get("isbn13"), "library_id": h["library_id"]})
+        if edition.get("isbn13"):
+            held_isbns.add(edition["isbn13"])
+    read_by_work = {str(s["work_id"]): s for s in
+                    store.read_states_for_works(auth.token, auth.user_id, [w["id"] for w in works])}
     for m in external:
         work = works_by_ol.get(m.get("ol_work_key")) or works_by_nkey.get(m.get("norm_key"))
-        owned = eds_by_work.get(work["id"], []) if work else []
-        m["owned_exact"] = bool(m.get("isbn13") and m["isbn13"] in local_isbns)
-        m["owned_editions"] = [
-            {"id": e["id"], "format": e.get("format"), "status": e["status"], "isbn13": e.get("isbn13")}
-            for e in owned
-        ]
+        m["owned_exact"] = bool(m.get("isbn13") and m["isbn13"] in held_isbns)
+        m["owned_editions"] = held_by_work.get(str(work["id"]), []) if work else []
+        state = read_by_work.get(str(work["id"])) if work else None
+        m["read_status"] = state["status"] if state else None
     return {"local": local, "external": external}
 
 
 # --------------------------------------------------------------------------
-# books CRUD
+# books CRUD (library_books — a library's copy of an edition)
 # --------------------------------------------------------------------------
 
-@app.post("/api/books")
-def api_add_book(body: AddBookBody, token: str = Depends(require_token)):
-    if body.status not in ("library", "wishlist"):
-        raise HTTPException(400, "status must be 'library' or 'wishlist'")
-    meta = body.metadata or {}
-    if not (meta.get("title") or "").strip():
-        raise HTTPException(400, "a title is required")
+def _resolve_edition(auth: AuthContext, meta: dict, fmt: str | None) -> dict:
+    """Find the catalog edition for this metadata, or create it."""
     store = get_store()
-
-    isbn13 = meta.get("isbn13")
-    if isbn13:
-        existing = store.get_edition_by_isbn(token, isbn13)
-        if existing:
-            fields = {"status": body.status, "status_changed_at": now_iso()}
-            if body.notes is not None:
-                fields["notes"] = body.notes
-            updated = store.update_edition(token, existing["id"], fields)
-            return {"edition": updated, "existed": True}
-
-    work = _resolve_work(token, meta)
-    edition = {
+    if meta.get("isbn13"):
+        edition = store.get_edition_by_isbn(auth.token, meta["isbn13"])
+        if edition:
+            return edition
+    work = _resolve_work(auth, meta)
+    return store.insert_edition(auth.token, {
         "id": new_id(),
         "work_id": work["id"],
-        "isbn13": isbn13,
+        "isbn13": meta.get("isbn13"),
         "isbn10": meta.get("isbn10"),
         "title": meta.get("title"),
         "subtitle": meta.get("subtitle"),
@@ -219,41 +400,84 @@ def api_add_book(body: AddBookBody, token: str = Depends(require_token)):
         "publisher": meta.get("publisher"),
         "published_date": meta.get("published_date"),
         "description": meta.get("description"),
-        "format": body.format or meta.get("format"),
+        "format": fmt or meta.get("format"),
         "cover_url": meta.get("cover_url"),
         "google_volume_id": meta.get("google_volume_id"),
         "ol_edition_key": meta.get("ol_edition_key"),
         "page_count": meta.get("page_count"),
         "language": meta.get("language"),
+        "added_at": now_iso(),
+    })
+
+
+@app.post("/api/books")
+def api_add_book(body: AddBookBody, auth: AuthContext = Depends(require_auth)):
+    if body.status not in ("library", "wishlist"):
+        raise HTTPException(400, "status must be 'library' or 'wishlist'")
+    meta = body.metadata or {}
+    if not (meta.get("title") or "").strip():
+        raise HTTPException(400, "a title is required")
+    store = get_store()
+    library_id = _target_library(auth, body.library_id)
+
+    edition = _resolve_edition(auth, meta, body.format)
+    existing = store.find_library_book(auth.token, library_id, edition["id"])
+    if existing:
+        fields = {"status": body.status, "status_changed_at": now_iso()}
+        if body.notes is not None:
+            fields["notes"] = body.notes
+        updated = store.update_library_book(auth.token, existing["id"], fields)
+        return {"book": _flatten_book({**updated, "edition": edition}), "existed": True}
+
+    created = store.insert_library_book(auth.token, {
+        "id": new_id(),
+        "library_id": library_id,
+        "edition_id": edition["id"],
         "status": body.status,
         "notes": body.notes,
         "copies": 1,
         "added_at": now_iso(),
         "status_changed_at": now_iso(),
-    }
-    created = store.insert_edition(token, edition)
-    return {"edition": created, "existed": False}
+    })
+    return {"book": _flatten_book({**created, "edition": edition}), "existed": False}
 
 
 @app.get("/api/books")
-def api_list_books(status: str | None = None, q: str | None = None, token: str = Depends(require_token)):
+def api_list_books(status: str | None = None, q: str | None = None,
+                   library_id: str | None = None, auth: AuthContext = Depends(require_auth)):
     if status not in (None, "library", "wishlist"):
         raise HTTPException(400, "status must be 'library' or 'wishlist'")
-    return {"items": get_store().list_editions(token, status=status, q=q)}
+    library_ids = [_target_library(auth, library_id)] if library_id else _library_ids(auth)
+    items = [_flatten_book(h) for h in
+             get_store().list_library_books(auth.token, library_ids, status=status)]
+    if q and q.strip():
+        items = [item for item in items if _matches_query(item, q.strip())]
+    _annotate_read_status(auth, items)
+    return {"items": items}
 
 
-@app.get("/api/books/{edition_id}")
-def api_get_book(edition_id: str, token: str = Depends(require_token)):
-    store = get_store()
-    edition = store.get_edition(token, edition_id)
-    if not edition:
+def _get_owned_book(auth: AuthContext, book_id: str) -> dict:
+    book = get_store().get_library_book(auth.token, book_id)
+    if not book or book["library_id"] not in _library_ids(auth):
         raise HTTPException(404, "book not found")
-    related = [e for e in store.editions_for_work(token, edition["work_id"]) if e["id"] != edition_id]
-    return {"edition": edition, "related": related}
+    return book
 
 
-@app.patch("/api/books/{edition_id}")
-def api_update_book(edition_id: str, body: UpdateBookBody, token: str = Depends(require_token)):
+@app.get("/api/books/{book_id}")
+def api_get_book(book_id: str, auth: AuthContext = Depends(require_auth)):
+    book = _get_owned_book(auth, book_id)
+    edition = book.get("edition") or {}
+    ownership = _ownership(auth, {}, edition=edition,
+                           work=get_store().get_work(auth.token, edition.get("work_id")),
+                           exclude_holding_id=book["id"])
+    return {"book": _flatten_book(book), "related": ownership["related"],
+            "read_state": ownership["read_state"]}
+
+
+@app.patch("/api/books/{book_id}")
+def api_update_book(book_id: str, body: UpdateBookBody, auth: AuthContext = Depends(require_auth)):
+    book = _get_owned_book(auth, book_id)
+    store = get_store()
     fields = {}
     if body.status is not None:
         if body.status not in ("library", "wishlist"):
@@ -262,30 +486,128 @@ def api_update_book(edition_id: str, body: UpdateBookBody, token: str = Depends(
         fields["status_changed_at"] = now_iso()
     if body.notes is not None:
         fields["notes"] = body.notes
-    if body.format is not None:
-        fields["format"] = body.format
     if body.copies is not None:
         fields["copies"] = max(1, body.copies)
-    if not fields:
+    edition = book.get("edition") or {}
+    if body.format is not None and body.format != edition.get("format"):
+        edition = store.update_edition(auth.token, book["edition_id"], {"format": body.format or None})
+    if not fields and body.format is None:
         raise HTTPException(400, "nothing to update")
-    updated = get_store().update_edition(token, edition_id, fields)
-    if not updated:
-        raise HTTPException(404, "book not found")
-    return {"edition": updated}
+    updated = store.update_library_book(auth.token, book_id, fields) if fields else book
+    return {"book": _flatten_book({**updated, "edition": edition})}
 
 
-@app.delete("/api/books/{edition_id}")
-def api_delete_book(edition_id: str, token: str = Depends(require_token)):
-    store = get_store()
-    if not store.get_edition(token, edition_id):
-        raise HTTPException(404, "book not found")
-    store.delete_edition(token, edition_id)
+@app.delete("/api/books/{book_id}")
+def api_delete_book(book_id: str, auth: AuthContext = Depends(require_auth)):
+    _get_owned_book(auth, book_id)
+    # the catalog edition/work stay: other libraries and read histories
+    # may point at them
+    get_store().delete_library_book(auth.token, book_id)
     return {"deleted": True}
 
 
+# --------------------------------------------------------------------------
+# read states (per-user, per-work — Goodreads-style shelves)
+# --------------------------------------------------------------------------
+
+@app.get("/api/reads")
+def api_list_reads(status: str | None = None, auth: AuthContext = Depends(require_auth)):
+    if status is not None and status not in READ_STATUSES:
+        raise HTTPException(400, f"status must be one of {', '.join(READ_STATUSES)}")
+    store = get_store()
+    library_ids = _library_ids(auth)
+    states = store.read_states_for_user(auth.token, auth.user_id)
+    if status:
+        states = [s for s in states if s["status"] == status]
+
+    # which of these works do my libraries actually hold?
+    holdings = store.list_library_books(auth.token, library_ids)
+    held_by_work = {}
+    for h in holdings:
+        edition = h.get("edition") or {}
+        held_by_work.setdefault(str(edition.get("work_id")), []).append(
+            {"id": h["id"], "format": edition.get("format"), "status": h["status"],
+             "library_id": h["library_id"]})
+
+    items = []
+    for s in states:
+        work = s.get("work") or {}
+        held = held_by_work.get(str(s["work_id"]), [])
+        items.append({
+            **(_read_state_public(s) or {}),
+            "title": work.get("title"),
+            "authors": work.get("authors"),
+            "cover_url": work.get("cover_url"),
+            "owned": any(h["status"] == "library" for h in held),
+            "owned_editions": held,
+        })
+    return {"items": items}
+
+
+@app.post("/api/reads")
+def api_upsert_read(body: ReadBody, auth: AuthContext = Depends(require_auth)):
+    if body.status not in READ_STATUSES:
+        raise HTTPException(400, f"status must be one of {', '.join(READ_STATUSES)}")
+    if body.rating is not None and not (1 <= body.rating <= 5):
+        raise HTTPException(400, "rating must be 1-5")
+    store = get_store()
+
+    if body.work_id:
+        work = store.get_work(auth.token, body.work_id)
+        if not work:
+            raise HTTPException(404, "work not found")
+    elif body.metadata and (body.metadata.get("title") or "").strip():
+        # marking something as read straight from scan/search — the work
+        # may not exist yet (read but never owned)
+        work = _resolve_work(auth, body.metadata)
+    else:
+        raise HTTPException(400, "work_id or metadata with a title is required")
+
+    fields = {
+        "edition_id": body.edition_id,
+        "status": body.status,
+        "rating": body.rating,
+        "notes": body.notes,
+        "started_at": body.started_at or None,
+        "finished_at": body.finished_at or None,
+        "updated_at": now_iso(),
+    }
+    existing = store.get_read_state(auth.token, auth.user_id, work["id"])
+    if existing:
+        state = store.update_read_state(auth.token, auth.user_id, work["id"], fields)
+    else:
+        state = store.insert_read_state(auth.token, {
+            "id": new_id(), "user_id": auth.user_id, "work_id": work["id"],
+            "created_at": now_iso(), **fields,
+        })
+    return {"read_state": _read_state_public(state), "work": work}
+
+
+@app.delete("/api/reads/{work_id}")
+def api_delete_read(work_id: str, auth: AuthContext = Depends(require_auth)):
+    store = get_store()
+    if not store.get_read_state(auth.token, auth.user_id, work_id):
+        raise HTTPException(404, "no read state for this work")
+    store.delete_read_state(auth.token, auth.user_id, work_id)
+    return {"deleted": True}
+
+
+# --------------------------------------------------------------------------
+# stats / misc
+# --------------------------------------------------------------------------
+
 @app.get("/api/stats")
-def api_stats(token: str = Depends(require_token)):
-    return get_store().stats(token)
+def api_stats(auth: AuthContext = Depends(require_auth)):
+    store = get_store()
+    holdings = store.list_library_books(auth.token, _library_ids(auth))
+    owned = [h for h in holdings if h["status"] == "library"]
+    states = store.read_states_for_user(auth.token, auth.user_id)
+    return {
+        "library": len(owned),
+        "wishlist": len(holdings) - len(owned),
+        "works": len({(h.get("edition") or {}).get("work_id") for h in holdings}),
+        "read": sum(1 for s in states if s["status"] == "read"),
+    }
 
 
 @app.get("/api/formats")

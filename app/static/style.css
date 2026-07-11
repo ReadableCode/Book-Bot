@@ -305,6 +305,79 @@ main#views {
 }
 .result-group-label .slashes { color: var(--green-bright); }
 
+/* ---------- libraries ---------- */
+
+.view-head { display: flex; align-items: baseline; justify-content: space-between; gap: .6rem; }
+.lib-btn {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--ink-2);
+  font-size: .72rem;
+  padding: .3rem .7rem;
+  cursor: pointer;
+  max-width: 55%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.lib-list { display: flex; flex-direction: column; gap: .5rem; margin-bottom: .4rem; }
+.lib-row {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: .6rem .75rem;
+  cursor: pointer;
+}
+.lib-row.active { border-color: rgba(86, 211, 100, .45); }
+.lib-row .lib-name { color: var(--ink); font-size: .85rem; }
+.lib-row.active .lib-name { color: var(--green-bright); }
+.lib-row .lib-members { color: var(--muted); font-size: .7rem; margin-top: .2rem; }
+
+/* ---------- reading history ---------- */
+
+.chips-row { display: flex; flex-wrap: wrap; gap: .35rem; margin-bottom: .8rem; }
+.chip-btn {
+  font-size: .7rem;
+  padding: .28rem .65rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.chip-btn.active { color: var(--green-bright); border-color: rgba(86, 211, 100, .45); }
+
+.read-status-row .chip-toggle {
+  background: var(--surface-2);
+  color: var(--ink-2);
+  border-color: var(--border);
+  font-size: .74rem;
+  padding: .5rem .3rem;
+}
+.read-status-row .chip-toggle.active {
+  color: var(--green-bright);
+  border-color: rgba(86, 211, 100, .45);
+}
+.read-details { margin-top: .7rem; }
+.stars { display: flex; gap: .2rem; margin-bottom: .7rem; }
+.star {
+  background: none; border: none; cursor: pointer;
+  font-size: 1.35rem; line-height: 1;
+  color: var(--muted); opacity: .5;
+  padding: .1rem .15rem;
+}
+.star.on { color: var(--amber-bright); opacity: 1; }
+.daterow { display: flex; gap: .55rem; }
+.daterow .field { flex: 1; }
+.read-line { margin-top: .35rem; color: var(--ink-2); }
+
+#sheet-read { margin-top: .4rem; }
+#sheet-read .btnrow { display: flex; gap: .5rem; }
+#sheet-read .btnrow .btn { flex: 1; }
+
+.copies-row { display: flex; align-items: center; gap: .8rem; }
+.copies-row .btn { padding: .35rem .9rem; }
+#copies-count { min-width: 2ch; text-align: center; color: var(--ink); }
+
 /* ---------- toast ---------- */
 
 .toast {

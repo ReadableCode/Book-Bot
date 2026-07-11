@@ -2,7 +2,7 @@
    assets, so the app shell opens even with flaky store wifi. API calls are
    never cached. */
 
-const CACHE = "book-bot-v1";
+const CACHE = "book-bot-v2";
 const STATIC = ["/", "/style.css", "/app.js", "/scanner.js", "/vendor/zxing.min.js", "/manifest.webmanifest"];
 
 self.addEventListener("install", (e) => {

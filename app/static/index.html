@@ -85,7 +85,10 @@
 
       <!-- library -->
       <section id="view-library" class="view hidden">
-        <h2><span class="slashes">//</span> library</h2>
+        <div class="view-head">
+          <h2><span class="slashes">//</span> library</h2>
+          <button id="library-btn" class="lib-btn" title="switch / share libraries">▤ …</button>
+        </div>
         <input id="library-filter" class="filter-input" placeholder="filter your shelves…">
         <div id="library-list" class="book-list"></div>
       </section>
@@ -97,6 +100,19 @@
         <div id="wishlist-list" class="book-list"></div>
       </section>
 
+      <!-- reading history -->
+      <section id="view-read" class="view hidden">
+        <h2><span class="slashes">//</span> reading history</h2>
+        <div id="read-filters" class="chips-row">
+          <button class="chip-btn active" data-filter="">all</button>
+          <button class="chip-btn" data-filter="read">read</button>
+          <button class="chip-btn" data-filter="reading">reading</button>
+          <button class="chip-btn" data-filter="want_to_read">want to read</button>
+          <button class="chip-btn" data-filter="unowned">read, not owned</button>
+        </div>
+        <div id="read-list" class="book-list"></div>
+      </section>
+
     </main>
 
     <nav class="bottombar">
@@ -104,6 +120,7 @@
       <button data-view="search" class="nav-btn"><span class="nav-icon">⌕</span>search</button>
       <button data-view="library" class="nav-btn"><span class="nav-icon">▤</span>library</button>
       <button data-view="wishlist" class="nav-btn"><span class="nav-icon">✩</span>wishlist</button>
+      <button data-view="read" class="nav-btn"><span class="nav-icon">✓</span>read</button>
     </nav>
   </div>
 

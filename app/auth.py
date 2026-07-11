@@ -7,8 +7,13 @@ before doing any work on a request.
 
 dev mode: same check against the local SQLite users table, token minted
 locally with the dev secret.
+
+Every token must carry the user's uuid as a "user_id" (or "sub") claim —
+library membership and read states hang off it, both here and in the
+row-level-security policies PostgREST enforces (deploy/04_user_libraries.sql).
 """
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
@@ -18,6 +23,12 @@ from fastapi import HTTPException, Request
 
 from . import config
 from .store import get_store
+
+
+@dataclass
+class AuthContext:
+    token: str  # raw JWT, forwarded to PostgREST
+    user_id: str
 
 
 def login(username: str, password: str) -> str:
@@ -44,17 +55,31 @@ def login(username: str, password: str) -> str:
     return jwt.encode(payload, config.JWT_SECRET, algorithm="HS256")
 
 
-def require_token(request: Request) -> str:
-    """FastAPI dependency: validates the Bearer token, returns it raw
-    (so stores can forward it to PostgREST)."""
-    header = request.headers.get("Authorization", "")
-    if not header.startswith("Bearer "):
-        raise HTTPException(401, "not logged in")
-    token = header[7:]
+def _user_id_from_payload(payload: dict) -> str:
+    user_id = payload.get("user_id") or payload.get("sub")
+    if not user_id:
+        raise HTTPException(
+            401,
+            "token carries no user_id claim — the auth service must mint one "
+            "(see deploy/README.md); log in again",
+        )
+    return str(user_id)
+
+
+def decode_token(token: str) -> AuthContext:
     try:
-        jwt.decode(token, config.JWT_SECRET, algorithms=["HS256"])
+        payload = jwt.decode(token, config.JWT_SECRET, algorithms=["HS256"])
     except jwt.ExpiredSignatureError:
         raise HTTPException(401, "session expired — log in again")
     except jwt.InvalidTokenError:
         raise HTTPException(401, "invalid session — log in again")
-    return token
+    return AuthContext(token=token, user_id=_user_id_from_payload(payload))
+
+
+def require_auth(request: Request) -> AuthContext:
+    """FastAPI dependency: validates the Bearer token, returns the raw token
+    (so stores can forward it to PostgREST) plus the caller's user id."""
+    header = request.headers.get("Authorization", "")
+    if not header.startswith("Bearer "):
+        raise HTTPException(401, "not logged in")
+    return decode_token(header[7:])
