@@ -1,7 +1,12 @@
 /* Barcode scanning: native BarcodeDetector where available (Chrome/Android),
    vendored ZXing everywhere else (iOS Safari). The camera stream is managed
    here; detection can be paused (while the result sheet is open) without
-   dropping the stream. */
+   dropping the stream.
+
+   The ZXing path runs its own frame loop — grab a video frame onto a canvas,
+   decode that bitmap — instead of ZXing's decodeFromStream, whose video
+   attach/play plumbing proved unreliable (decode loop intermittently never
+   fires despite decodable frames). Direct per-frame decoding is deterministic. */
 
 const Scanner = (() => {
   let stream = null;
@@ -9,10 +14,11 @@ const Scanner = (() => {
   let onCode = null;
   let running = false;   // camera on
   let detecting = false; // actively looking for barcodes
-  let usingZXing = false;
-  let zxingReader = null;
   let detector = null;
-  let rafId = null;
+  let timerId = null;
+  let zxingReader = null;
+  let zxingHints = null;
+  let grabCanvas = null;
 
   async function nativeSupported() {
     if (!("BarcodeDetector" in window)) return false;
@@ -34,7 +40,26 @@ const Scanner = (() => {
         }
       } catch { /* detection hiccup — keep looping */ }
     }
-    rafId = setTimeout(nativeLoop, 180);
+    timerId = setTimeout(nativeLoop, 180);
+  }
+
+  function zxingLoop() {
+    if (!running) return;
+    if (detecting && video.readyState >= 2 && video.videoWidth) {
+      if (grabCanvas.width !== video.videoWidth || grabCanvas.height !== video.videoHeight) {
+        grabCanvas.width = video.videoWidth;
+        grabCanvas.height = video.videoHeight;
+      }
+      grabCanvas.getContext("2d").drawImage(video, 0, 0);
+      try {
+        const bitmap = new ZXing.BinaryBitmap(
+          new ZXing.HybridBinarizer(new ZXing.HTMLCanvasElementLuminanceSource(grabCanvas))
+        );
+        const result = zxingReader.decode(bitmap, zxingHints);
+        if (result) handleCode(result.getText());
+      } catch { /* no barcode in this frame — keep looping */ }
+    }
+    timerId = setTimeout(zxingLoop, 200);
   }
 
   function handleCode(text) {
@@ -61,22 +86,19 @@ const Scanner = (() => {
     detecting = true;
 
     if (await nativeSupported()) {
-      usingZXing = false;
       detector = new window.BarcodeDetector({ formats: ["ean_13", "upc_a", "ean_8"] });
       nativeLoop();
     } else {
-      usingZXing = true;
-      const hints = new Map();
-      hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+      zxingReader = new ZXing.MultiFormatReader();
+      zxingHints = new Map();
+      zxingHints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
         ZXing.BarcodeFormat.EAN_13,
         ZXing.BarcodeFormat.UPC_A,
         ZXing.BarcodeFormat.EAN_8,
       ]);
-      hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-      zxingReader = new ZXing.BrowserMultiFormatReader(hints);
-      zxingReader.decodeFromStream(stream, video, (result) => {
-        if (result) handleCode(result.getText());
-      });
+      zxingHints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+      grabCanvas = document.createElement("canvas");
+      zxingLoop();
     }
   }
 
@@ -86,11 +108,7 @@ const Scanner = (() => {
   function stop() {
     running = false;
     detecting = false;
-    if (rafId) { clearTimeout(rafId); rafId = null; }
-    if (zxingReader) {
-      try { zxingReader.reset(); } catch { /* already stopped */ }
-      zxingReader = null;
-    }
+    if (timerId) { clearTimeout(timerId); timerId = null; }
     if (stream) {
       stream.getTracks().forEach((t) => t.stop());
       stream = null;

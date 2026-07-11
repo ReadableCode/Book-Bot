@@ -147,9 +147,21 @@ def api_search(q: str, token: str = Depends(require_token)):
     if not q:
         return {"local": [], "external": []}
     store = get_store()
+
+    # An ISBN typed into the search box gets a direct lookup — free-text
+    # search misses ISBNs for editions the catalogs haven't cross-indexed.
+    norm = metadata.normalize_code(q)
+    if norm["ok"]:
+        q = norm["isbn13"]
     local = store.list_editions(token, q=q)
 
-    external = metadata.search_external(q)
+    external = []
+    if norm["ok"]:
+        meta = metadata.lookup_isbn(norm["isbn13"])
+        if meta:
+            external = [meta]
+    if not external:
+        external = metadata.search_external(q)
     # annotate external results with what's already on the shelves
     nkeys = [m["norm_key"] for m in external if m.get("norm_key")]
     olkeys = [m["ol_work_key"] for m in external if m.get("ol_work_key")]

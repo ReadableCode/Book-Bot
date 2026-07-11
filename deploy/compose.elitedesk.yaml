@@ -34,6 +34,8 @@ services:
       # Same secret PostgREST/auth use, so the backend can verify the tokens
       # it forwards.
       JWT_SECRET: ${POSTGREST_JWT_SECRET}
+      # Books API auth — anonymous Google Books calls are quota-blocked.
+      GOOGLE_SERVICE_ACCOUNT: ${GOOGLE_SERVICE_ACCOUNT}
       # POSTGRES_* kept so the container's entrypoint can run
       # scripts/init_db.py (idempotent schema/role setup connects to Postgres
       # directly) before uvicorn starts — book-bot's alembic-upgrade-head.

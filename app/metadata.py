@@ -138,11 +138,37 @@ def _google_volume_to_meta(item: dict) -> dict:
     }
 
 
+_google_creds = None
+
+
+def _google_auth_headers() -> dict:
+    """Bearer token from the service account (Books API enabled on its
+    project). Anonymous calls hit a zero per-IP quota, so this is what
+    keeps Google Books usable; failures degrade to anonymous."""
+    global _google_creds
+    if not config.GOOGLE_SERVICE_ACCOUNT_INFO:
+        return {}
+    try:
+        if _google_creds is None:
+            from google.oauth2 import service_account
+            _google_creds = service_account.Credentials.from_service_account_info(
+                config.GOOGLE_SERVICE_ACCOUNT_INFO,
+                scopes=["https://www.googleapis.com/auth/books"],
+            )
+        if not _google_creds.valid:
+            from google.auth.transport.requests import Request
+            _google_creds.refresh(Request())
+        return {"Authorization": f"Bearer {_google_creds.token}"}
+    except Exception:
+        return {}
+
+
 def _google_get(params: dict) -> list[dict]:
     if config.GOOGLE_BOOKS_API_KEY:
         params = {**params, "key": config.GOOGLE_BOOKS_API_KEY}
     try:
-        resp = requests.get(GOOGLE_VOLUMES_URL, params=params, timeout=config.HTTP_TIMEOUT)
+        resp = requests.get(GOOGLE_VOLUMES_URL, params=params,
+                            headers=_google_auth_headers(), timeout=config.HTTP_TIMEOUT)
         resp.raise_for_status()
         return resp.json().get("items") or []
     except requests.RequestException:

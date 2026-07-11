@@ -35,4 +35,16 @@ SQLITE_PATH = os.environ.get("SQLITE_PATH", os.path.join(os.path.dirname(os.path
 
 GOOGLE_BOOKS_API_KEY = os.environ.get("GOOGLE_BOOKS_API_KEY") or None
 
+# Service account with the Books API enabled on its project. Anonymous
+# Books API calls are quota-blocked (429) these days, so authenticated
+# requests are the only reliable path. Same GOOGLE_SERVICE_ACCOUNT JSON
+# blob the other repos' google_tools.py uses from personal.env.
+import json as _json
+
+_sa_raw = os.environ.get("GOOGLE_SERVICE_ACCOUNT")
+try:
+    GOOGLE_SERVICE_ACCOUNT_INFO = _json.loads(_sa_raw) if _sa_raw else None
+except ValueError:
+    GOOGLE_SERVICE_ACCOUNT_INFO = None
+
 HTTP_TIMEOUT = 10
