@@ -116,6 +116,11 @@ def _isbn13_valid(code: str) -> bool:
     return bool(re.fullmatch(r"\d{13}", code)) and _ean13_check_digit(code[:12]) == code[12]
 
 
+def _upc_valid(code: str) -> bool:
+    # UPC-A is EAN-13 with an implied leading zero, so the same check applies
+    return bool(re.fullmatch(r"\d{12}", code)) and _ean13_check_digit("0" + code[:11]) == code[11]
+
+
 def isbn10_to_isbn13(isbn10: str) -> str:
     core = "978" + isbn10[:9]
     return core + _ean13_check_digit(core)
@@ -131,11 +136,12 @@ def isbn13_to_isbn10(isbn13: str) -> str | None:
 
 
 def normalize_code(raw: str) -> dict:
-    """Turn a scanned barcode or typed code into an ISBN-13, or explain why not.
+    """Turn a scanned barcode or typed code into an ISBN-13 or a UPC-A.
 
     Book barcodes are "Bookland" EAN-13 (prefix 978/979) — the ISBN-13
     itself. Older US mass-market paperbacks carry a 12-digit UPC-A that
-    does NOT encode the ISBN; those can only be found by title search.
+    does NOT encode the ISBN; those come back as {"upc": ...} and get
+    resolved against the catalogs' identifier indexes (lookup_upc).
     """
     code = _digits(raw)
     if len(code) == 13 and code.startswith(("978", "979")):
@@ -145,15 +151,19 @@ def normalize_code(raw: str) -> dict:
                 "reason": "that looks like an isbn-13 but the check digit is wrong — re-scan or re-type it"}
     if len(code) == 10 and _isbn10_valid(code):
         return {"ok": True, "isbn13": isbn10_to_isbn13(code)}
+    if len(code) == 13 and code.startswith("0"):
+        # a UPC-A decoded as EAN-13 arrives with a leading zero
+        code = code[1:]
     if len(code) == 12:
+        if _upc_valid(code):
+            return {"ok": True, "upc": code}
         return {"ok": False,
-                "reason": "that's a upc barcode that doesn't encode an isbn (common on older mass-market "
-                          "paperbacks) — search by title/author instead, or scan the isbn barcode inside the cover"}
+                "reason": "that looks like a upc but the check digit is wrong — re-scan or re-type it"}
     if len(code) == 13:
         return {"ok": False,
                 "reason": "that barcode isn't a book isbn (books start 978 or 979) — "
                           "try the barcode on the back cover or inside flap"}
-    return {"ok": False, "reason": "couldn't read an isbn from that — expected 10 or 13 digits"}
+    return {"ok": False, "reason": "couldn't read an isbn or upc from that — expected 10, 12 or 13 digits"}
 
 
 # --------------------------------------------------------------------------
@@ -384,6 +394,61 @@ def lookup_isbn(isbn13: str) -> dict | None:
         if not meta.get("genre"):
             meta["genre"] = normalize_genre(details.get("subjects"))
     return meta
+
+
+def lookup_upc(upc: str) -> dict | None:
+    """Best-effort UPC-A → book metadata.
+
+    The UPC on a book doesn't encode the ISBN, but both catalogs often
+    index it on the edition record, so an identifier search usually
+    resolves it to a real edition. When only a work-level Open Library
+    match exists, that's returned (no ISBN — same shape search results
+    use)."""
+    for q in (f"isbn:{upc}", f'"{upc}"'):
+        for item in _google_get({"q": q, "maxResults": 5, "printType": "books"}):
+            meta = _google_volume_to_meta(item)
+            if meta["isbn13"]:
+                return lookup_isbn(meta["isbn13"]) or meta
+            if meta["title"]:
+                return meta
+
+    data = _ol_get(OPENLIBRARY_SEARCH_URL, {
+        "q": upc,
+        "limit": 3,
+        "fields": "key,title,author_name,first_publish_year,cover_i,publisher,isbn",
+    })
+    for doc in data.get("docs") or []:
+        for isbn in doc.get("isbn") or []:
+            digits = _digits(isbn)
+            if digits.startswith(("978", "979")) and _isbn13_valid(digits):
+                meta = lookup_isbn(digits)
+                if meta:
+                    return meta
+        title = doc.get("title")
+        if not title:
+            continue
+        authors = doc.get("author_name") or []
+        cover_i = doc.get("cover_i")
+        return {
+            "isbn13": None,
+            "isbn10": None,
+            "title": title,
+            "subtitle": None,
+            "authors": authors,
+            "publisher": (doc.get("publisher") or [None])[0],
+            "published_date": str(doc.get("first_publish_year") or "") or None,
+            "description": None,
+            "page_count": None,
+            "language": None,
+            "google_volume_id": None,
+            "cover_url": f"https://covers.openlibrary.org/b/id/{cover_i}-M.jpg" if cover_i else None,
+            "ol_edition_key": None,
+            "ol_work_key": (doc.get("key") or "").replace("/works/", "") or None,
+            "format": None,
+            "genre": None,
+            "norm_key": norm_key(title, authors),
+        }
+    return None
 
 
 def genre_for_edition(edition: dict) -> str | None:

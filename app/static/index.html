@@ -60,15 +60,15 @@
           </div>
           <div id="scan-idle" class="scan-idle">
             <p class="hint">point the camera at the barcode on the back cover.<br>
-              works with isbn barcodes (starting 978/979).</p>
+              works with isbn and upc barcodes.</p>
             <button id="scan-start" class="btn primary wide">start camera</button>
           </div>
           <button id="scan-stop" class="btn secondary wide hidden">stop camera</button>
           <div id="scan-status" class="scan-status"></div>
         </div>
-        <h2><span class="slashes">//</span> or type the isbn</h2>
+        <h2><span class="slashes">//</span> or type the code</h2>
         <form id="manual-form" class="row-form">
-          <input id="manual-code" inputmode="numeric" placeholder="isbn — 10 or 13 digits">
+          <input id="manual-code" inputmode="numeric" placeholder="isbn or upc — 10, 12 or 13 digits">
           <button class="btn primary" type="submit">look up</button>
         </form>
       </section>
