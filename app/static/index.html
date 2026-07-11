@@ -90,6 +90,20 @@
         <div id="library-list" class="book-list"></div>
       </section>
 
+      <!-- shelves — virtual bookshelf -->
+      <section id="view-shelves" class="view hidden">
+        <div class="shelves-head">
+          <h2><span class="slashes">//</span> my library</h2>
+          <div id="shelves-count" class="shelves-count"></div>
+          <div class="seg" id="shelf-mode" role="tablist">
+            <button data-mode="genre" class="seg-btn active" role="tab" aria-selected="true">genre</button>
+            <button data-mode="format" class="seg-btn" role="tab" aria-selected="false">type</button>
+            <button data-mode="author" class="seg-btn" role="tab" aria-selected="false">author</button>
+          </div>
+        </div>
+        <div id="bookcase" class="bookcase"></div>
+      </section>
+
       <!-- wishlist -->
       <section id="view-wishlist" class="view hidden">
         <h2><span class="slashes">//</span> wishlist</h2>
@@ -103,6 +117,7 @@
       <button data-view="scan" class="nav-btn active"><span class="nav-icon">▥</span>scan</button>
       <button data-view="search" class="nav-btn"><span class="nav-icon">⌕</span>search</button>
       <button data-view="library" class="nav-btn"><span class="nav-icon">▤</span>library</button>
+      <button data-view="shelves" class="nav-btn"><span class="nav-icon">▦</span>shelves</button>
       <button data-view="wishlist" class="nav-btn"><span class="nav-icon">✩</span>wishlist</button>
     </nav>
   </div>
@@ -116,5 +131,8 @@
   <script src="vendor/zxing.min.js" defer></script>
   <script src="scanner.js" defer></script>
   <script src="app.js" defer></script>
+  <script src="vendor/gsap.min.js" defer></script>
+  <script src="vendor/Flip.min.js" defer></script>
+  <script src="shelf.js" defer></script>
 </body>
 </html>
