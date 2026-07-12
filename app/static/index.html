@@ -60,15 +60,15 @@
           </div>
           <div id="scan-idle" class="scan-idle">
             <p class="hint">point the camera at the barcode on the back cover.<br>
-              works with isbn barcodes (starting 978/979).</p>
+              works with isbn and upc barcodes.</p>
             <button id="scan-start" class="btn primary wide">start camera</button>
           </div>
           <button id="scan-stop" class="btn secondary wide hidden">stop camera</button>
           <div id="scan-status" class="scan-status"></div>
         </div>
-        <h2><span class="slashes">//</span> or type the isbn</h2>
+        <h2><span class="slashes">//</span> or type the code</h2>
         <form id="manual-form" class="row-form">
-          <input id="manual-code" inputmode="numeric" placeholder="isbn — 10 or 13 digits">
+          <input id="manual-code" inputmode="numeric" placeholder="isbn or upc — 10, 12 or 13 digits">
           <button class="btn primary" type="submit">look up</button>
         </form>
       </section>
@@ -98,6 +98,23 @@
         <div id="library-list" class="book-list"></div>
       </section>
 
+      <!-- shelves — the 3D library world (DOM bookcase as WebGL fallback) -->
+      <section id="view-shelves" class="view hidden">
+        <div class="shelves-head">
+          <h2><span class="slashes">//</span> my library</h2>
+          <div id="shelves-count" class="shelves-count"></div>
+          <div class="seg" id="shelf-mode" role="tablist">
+            <button data-mode="genre" class="seg-btn active" role="tab" aria-selected="true">genre</button>
+            <button data-mode="format" class="seg-btn" role="tab" aria-selected="false">type</button>
+            <button data-mode="author" class="seg-btn" role="tab" aria-selected="false">author</button>
+          </div>
+        </div>
+        <div id="world3d" class="world3d hidden">
+          <div id="world3d-hint" class="world3d-hint">drag to look around · scroll or pinch to zoom · tap a book</div>
+        </div>
+        <div id="bookcase" class="bookcase"></div>
+      </section>
+
       <!-- wishlist -->
       <section id="view-wishlist" class="view hidden">
         <h2><span class="slashes">//</span> wishlist</h2>
@@ -124,6 +141,7 @@
       <button data-view="scan" class="nav-btn active"><span class="nav-icon">▥</span>scan</button>
       <button data-view="search" class="nav-btn"><span class="nav-icon">⌕</span>search</button>
       <button data-view="library" class="nav-btn"><span class="nav-icon">▤</span>library</button>
+      <button data-view="shelves" class="nav-btn"><span class="nav-icon">▦</span>shelves</button>
       <button data-view="wishlist" class="nav-btn"><span class="nav-icon">✩</span>wishlist</button>
       <button data-view="read" class="nav-btn"><span class="nav-icon">✓</span>read</button>
     </nav>
@@ -138,5 +156,9 @@
   <script src="vendor/zxing.min.js" defer></script>
   <script src="scanner.js" defer></script>
   <script src="app.js" defer></script>
+  <script src="vendor/gsap.min.js" defer></script>
+  <script src="vendor/Flip.min.js" defer></script>
+  <script src="shelf.js" defer></script>
+  <script src="shelf3d.js" type="module"></script>
 </body>
 </html>

@@ -45,7 +45,8 @@ from . import config
 EDITION_FIELDS = [
     "id", "work_id", "isbn13", "isbn10", "title", "subtitle", "authors",
     "publisher", "published_date", "description", "format", "cover_url",
-    "google_volume_id", "ol_edition_key", "page_count", "language", "added_at",
+    "google_volume_id", "ol_edition_key", "page_count", "language", "genre",
+    "added_at",
 ]
 
 WORK_FIELDS = ["id", "ol_work_key", "norm_key", "title", "authors", "cover_url", "created_at"]
@@ -354,6 +355,7 @@ CREATE TABLE IF NOT EXISTS editions (
     ol_edition_key TEXT,
     page_count INTEGER,
     language TEXT,
+    genre TEXT,
     added_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_editions_work ON editions(work_id);
@@ -419,6 +421,7 @@ CREATE TABLE editions_new (
     ol_edition_key TEXT,
     page_count INTEGER,
     language TEXT,
+    genre TEXT,
     added_at TEXT NOT NULL
 );
 """
@@ -436,14 +439,18 @@ class SqliteStore:
         self._migrate_legacy()
 
     def _prepare_schema(self):
-        # pre-multi-user works tables lack cover_url; CREATE IF NOT EXISTS
-        # won't add it, so patch it in before applying the schema.
+        # pre-multi-user works tables lack cover_url, and editions tables
+        # from before genre support lack genre; CREATE IF NOT EXISTS won't
+        # add columns, so patch them in before applying the schema.
         cur = self._conn.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'works'")
         if cur.fetchone():
             columns = {r["name"] for r in self._conn.execute("PRAGMA table_info(works)")}
             if "cover_url" not in columns:
                 self._conn.execute("ALTER TABLE works ADD COLUMN cover_url TEXT")
+        columns = {r["name"] for r in self._conn.execute("PRAGMA table_info(editions)")}
+        if columns and "genre" not in columns:
+            self._conn.execute("ALTER TABLE editions ADD COLUMN genre TEXT")
         # a library_books table created before the 'digital' status has a
         # narrower CHECK; SQLite can't alter constraints, so rebuild it.
         row = self._conn.execute(

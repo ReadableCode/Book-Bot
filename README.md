@@ -59,6 +59,10 @@ inside the cover or searching by title.
   (style-terminal-navy tokens). Barcode scanning via the native
   BarcodeDetector API where available, vendored ZXing elsewhere
   (iPhone Safari). Installable to the home screen.
+- **shelves** — the library tab renders a real-time 3D rotunda
+  (vendored Three.js): wooden bookcases in an arc, each book a physical
+  object textured with its cover, GSAP-driven flights when regrouping by
+  genre / type / author. Falls back to a CSS bookcase without WebGL.
 
 ## accounts + shared libraries
 
@@ -74,6 +78,31 @@ PostgREST.
 
 Reading history is never shared: read status, ratings, read dates and
 reading notes are always per-user, whichever library the book sits in.
+
+### managing libraries from the cli
+
+Everything the `▤` button does (and a bit more) is also scriptable.
+`scripts/manage_library.py` talks to whatever backend the environment
+selects — the local SQLite file in dev mode, or Postgres directly (with
+the superuser `POSTGRES_*` env vars, bypassing the API) in production:
+
+```sh
+# see every library, its members and book counts
+uv run python scripts/manage_library.py list
+
+# create a shared library with members in one go
+uv run python scripts/manage_library.py create --name "Cabin Books" \
+    --member jason --member beca
+
+# add someone to an existing library (name or uuid)
+uv run python scripts/manage_library.py add-member \
+    --library "Family Library" --username beca
+```
+
+Users themselves are created with `scripts/create_user.py`; members must
+exist before they can be added. In production, run both scripts inside
+the book-bot container, which has the right env (see
+[`deploy/README.md`](deploy/README.md)).
 
 ## run it locally (dev mode, SQLite)
 
@@ -121,7 +150,8 @@ uv run python scripts/import_scans.py --file ~/SyncthingDB/Book-Bot/HoneyCrisp.j
 ```
 app/            FastAPI backend + static frontend (app/static)
 deploy/         one-time SQL + notes for the shared PostgREST stack
-scripts/        create_user.py, import_scans.py
+scripts/        create_user.py, manage_library.py, import_scans.py,
+                seed_books.py
 tests/          pytest suite (API against a throwaway SQLite database)
 archive/        the previous generation of Book-Bot scripts (Open Library
                 dump loaders, ebook file renamer, ad-hoc queries) — kept

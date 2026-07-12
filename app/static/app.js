@@ -244,6 +244,7 @@ $("#logout-btn").addEventListener("click", () => showLogin());
 
 function switchView(name) {
   currentView = name;
+  $("#app").classList.toggle("lib-wide", name === "shelves"); // shelves get room on desktop
   document.querySelectorAll(".view").forEach((v) => v.classList.add("hidden"));
   $(`#view-${name}`).classList.remove("hidden");
   document.querySelectorAll(".nav-btn").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
@@ -251,6 +252,7 @@ function switchView(name) {
   if (name === "library") loadList("library");
   if (name === "wishlist") loadList("wishlist");
   if (name === "read") loadReads();
+  if (name === "shelves") Shelf.enter();
 }
 
 document.querySelectorAll(".nav-btn").forEach((btn) =>
@@ -279,7 +281,7 @@ async function startScanner() {
     status.textContent = "looking for a barcode…";
   } catch (err) {
     stopScanner();
-    status.textContent = `camera unavailable: ${err.message}. type the isbn below instead.`;
+    status.textContent = `camera unavailable: ${err.message}. type the isbn or upc below instead.`;
   }
 }
 
@@ -315,7 +317,8 @@ async function lookupCode(code, { resumeScannerOnClose = false } = {}) {
     }
     $("#scan-status").textContent = "";
     if (!data.found) {
-      toast(`isbn ${data.isbn13} wasn't found in google books or open library — try a title search`, "err");
+      const what = data.isbn13 ? `isbn ${data.isbn13}` : `barcode ${code}`;
+      toast(`${what} wasn't found in google books or open library — try a title search`, "err");
       if (resumeScannerOnClose) setTimeout(() => Scanner.resume(), 2200);
       return;
     }

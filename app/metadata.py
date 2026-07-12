@@ -22,6 +22,75 @@ OPENLIBRARY_BASE = "https://openlibrary.org"
 
 FORMATS = ["hardcover", "paperback", "mass market", "special edition", "ebook", "audiobook", "other"]
 
+# canonical shelf genres for the virtual bookshelf. An edition's genre is
+# free text in the store, but everything we derive from external metadata
+# collapses into one of these.
+GENRES = [
+    "fantasy", "science fiction", "horror", "mystery", "thriller", "romance",
+    "historical fiction", "literary fiction", "classics", "young adult",
+    "children's", "comics", "poetry", "biography", "history", "science",
+    "nature", "philosophy", "religion", "self-help", "business", "cooking",
+    "art", "travel", "humor", "true crime", "essays", "nonfiction", "fiction",
+]
+
+# regex → genre, checked in order against lowercased raw category/subject
+# strings. Order matters: specific genres come before the generic words
+# they contain ("science fiction" before "science", "historical fiction"
+# before "history", "natural history" before "history", ...).
+_GENRE_RULES = [
+    (r"science fiction|sci-fi|space opera|cyberpunk|dystopia", "science fiction"),
+    (r"historical fiction", "historical fiction"),
+    (r"true crime", "true crime"),
+    (r"graphic novel|comic|manga", "comics"),
+    (r"young adult|\bya\b|teenage", "young adult"),
+    (r"juvenile|children", "children's"),
+    (r"fantasy|magic|dragon|wizard|fairy tale", "fantasy"),
+    (r"horror|ghost stories|vampire|zombie|occult", "horror"),
+    (r"detective|mystery|crime fiction|whodunit|noir", "mystery"),
+    (r"thriller|suspense|espionage|spy stories", "thriller"),
+    (r"romance|love stories", "romance"),
+    (r"literary fiction|bildungsroman", "literary fiction"),
+    (r"classic", "classics"),
+    (r"poetry|poems", "poetry"),
+    (r"biograph|memoir", "biography"),
+    (r"self-help|self help|self improvement|personal growth", "self-help"),
+    (r"cook", "cooking"),
+    (r"humor|humour|comedy|jokes", "humor"),
+    (r"essay|literary collections", "essays"),
+    (r"nature|natural history|environment|wildlife", "nature"),
+    (r"philosoph", "philosophy"),
+    (r"religio|spiritual|theology|bible", "religion"),
+    (r"business|econom|entrepreneur|management|finance", "business"),
+    (r"\barts?\b|painting|photograph|architecture", "art"),
+    (r"travel", "travel"),
+    (r"history", "history"),
+    (r"science|mathematics|physics|astronomy", "science"),
+]
+
+_GENRE_PATTERNS = [(re.compile(pattern), genre) for pattern, genre in _GENRE_RULES]
+
+
+def normalize_genre(raw_categories: list[str] | None) -> str | None:
+    """Collapse raw category/subject strings into one canonical genre.
+
+    Handles both Google Books categories ("Fiction / Fantasy / Epic") and
+    Open Library subjects ("Detective and mystery stories", "Juvenile
+    fiction"). Falls back to plain fiction/nonfiction when nothing more
+    specific matches, else None (= we don't know yet).
+    """
+    if not raw_categories:
+        return None
+    lowered = [str(c).lower() for c in raw_categories if c]
+    for pattern, genre in _GENRE_PATTERNS:
+        if any(pattern.search(cat) for cat in lowered):
+            return genre
+    joined = " ".join(lowered)
+    if "nonfiction" in joined or "non-fiction" in joined:
+        return "nonfiction"
+    if "fiction" in joined:
+        return "fiction"
+    return None
+
 
 # --------------------------------------------------------------------------
 # barcode / ISBN handling
@@ -47,6 +116,11 @@ def _isbn13_valid(code: str) -> bool:
     return bool(re.fullmatch(r"\d{13}", code)) and _ean13_check_digit(code[:12]) == code[12]
 
 
+def _upc_valid(code: str) -> bool:
+    # UPC-A is EAN-13 with an implied leading zero, so the same check applies
+    return bool(re.fullmatch(r"\d{12}", code)) and _ean13_check_digit("0" + code[:11]) == code[11]
+
+
 def isbn10_to_isbn13(isbn10: str) -> str:
     core = "978" + isbn10[:9]
     return core + _ean13_check_digit(core)
@@ -62,24 +136,34 @@ def isbn13_to_isbn10(isbn13: str) -> str | None:
 
 
 def normalize_code(raw: str) -> dict:
-    """Turn a scanned barcode or typed code into an ISBN-13, or explain why not.
+    """Turn a scanned barcode or typed code into an ISBN-13 or a UPC-A.
 
     Book barcodes are "Bookland" EAN-13 (prefix 978/979) — the ISBN-13
     itself. Older US mass-market paperbacks carry a 12-digit UPC-A that
-    does NOT encode the ISBN; those can only be found by title search.
+    does NOT encode the ISBN; those come back as {"upc": ...} and get
+    resolved against the catalogs' identifier indexes (lookup_upc).
     """
     code = _digits(raw)
     if len(code) == 13 and code.startswith(("978", "979")):
         if _isbn13_valid(code):
             return {"ok": True, "isbn13": code}
-        return {"ok": False, "reason": "that looks like an isbn-13 but the check digit is wrong — re-scan or re-type it"}
+        return {"ok": False,
+                "reason": "that looks like an isbn-13 but the check digit is wrong — re-scan or re-type it"}
     if len(code) == 10 and _isbn10_valid(code):
         return {"ok": True, "isbn13": isbn10_to_isbn13(code)}
+    if len(code) == 13 and code.startswith("0"):
+        # a UPC-A decoded as EAN-13 arrives with a leading zero
+        code = code[1:]
     if len(code) == 12:
-        return {"ok": False, "reason": "that's a upc barcode that doesn't encode an isbn (common on older mass-market paperbacks) — search by title/author instead, or scan the isbn barcode inside the cover"}
+        if _upc_valid(code):
+            return {"ok": True, "upc": code}
+        return {"ok": False,
+                "reason": "that looks like a upc but the check digit is wrong — re-scan or re-type it"}
     if len(code) == 13:
-        return {"ok": False, "reason": "that barcode isn't a book isbn (books start 978 or 979) — try the barcode on the back cover or inside flap"}
-    return {"ok": False, "reason": "couldn't read an isbn from that — expected 10 or 13 digits"}
+        return {"ok": False,
+                "reason": "that barcode isn't a book isbn (books start 978 or 979) — "
+                          "try the barcode on the back cover or inside flap"}
+    return {"ok": False, "reason": "couldn't read an isbn or upc from that — expected 10, 12 or 13 digits"}
 
 
 # --------------------------------------------------------------------------
@@ -134,6 +218,7 @@ def _google_volume_to_meta(item: dict) -> dict:
         "ol_edition_key": None,
         "ol_work_key": None,
         "format": None,
+        "genre": normalize_genre(info.get("categories")),
         "norm_key": norm_key(info.get("title") or "", authors),
     }
 
@@ -172,6 +257,20 @@ def _google_get(params: dict) -> list[dict]:
         resp.raise_for_status()
         return resp.json().get("items") or []
     except requests.RequestException:
+        return []
+
+
+def _google_volume_by_id(vol_id: str) -> list[str]:
+    """Categories for one known Google Books volume (the by-id record is
+    often richer than what the search endpoint returned)."""
+    params = {}
+    if config.GOOGLE_BOOKS_API_KEY:
+        params["key"] = config.GOOGLE_BOOKS_API_KEY
+    try:
+        resp = requests.get(f"{GOOGLE_VOLUMES_URL}/{vol_id}", params=params, timeout=config.HTTP_TIMEOUT)
+        resp.raise_for_status()
+        return (resp.json().get("volumeInfo") or {}).get("categories") or []
+    except (requests.RequestException, ValueError):
         return []
 
 
@@ -223,9 +322,9 @@ def _ol_get(url: str, params: dict | None = None) -> dict:
 
 
 def fetch_ol_work_details(ol_work_key: str) -> dict:
-    """Author names + description from an Open Library work record.
-    Used when Google Books is unavailable (rate limits are per-IP for
-    anonymous callers, so this happens in the wild)."""
+    """Author names, description and subjects from an Open Library work
+    record. Used when Google Books is unavailable (rate limits are per-IP
+    for anonymous callers, so this happens in the wild)."""
     work = _ol_get(f"{OPENLIBRARY_BASE}/works/{ol_work_key}.json")
     if not work:
         return {}
@@ -239,7 +338,7 @@ def fetch_ol_work_details(ol_work_key: str) -> dict:
             author = _ol_get(f"{OPENLIBRARY_BASE}/authors/{key}.json")
             if author.get("name"):
                 authors.append(author["name"])
-    return {"authors": authors, "description": desc}
+    return {"authors": authors, "description": desc, "subjects": work.get("subjects") or []}
 
 
 def lookup_isbn(isbn13: str) -> dict | None:
@@ -275,6 +374,7 @@ def lookup_isbn(isbn13: str) -> dict | None:
             "ol_edition_key": None,
             "ol_work_key": None,
             "format": None,
+            "genre": None,
             "norm_key": norm_key(ol["ol_title"], []),
         }
     if not meta.get("isbn10"):
@@ -282,15 +382,95 @@ def lookup_isbn(isbn13: str) -> dict | None:
     meta["ol_edition_key"] = ol.get("ol_edition_key")
     meta["ol_work_key"] = ol.get("ol_work_key")
     meta["format"] = ol.get("format")
-    # Google gave nothing usable — pull authors/description off the OL work
-    if (not meta["authors"] or not meta.get("description")) and ol.get("ol_work_key"):
+    # Google gave nothing usable — pull authors/description/genre off the OL work
+    missing = not meta["authors"] or not meta.get("description") or not meta.get("genre")
+    if missing and ol.get("ol_work_key"):
         details = fetch_ol_work_details(ol["ol_work_key"])
         if not meta["authors"] and details.get("authors"):
             meta["authors"] = details["authors"]
             meta["norm_key"] = norm_key(meta["title"], meta["authors"])
         if not meta.get("description") and details.get("description"):
             meta["description"] = details["description"]
+        if not meta.get("genre"):
+            meta["genre"] = normalize_genre(details.get("subjects"))
     return meta
+
+
+def lookup_upc(upc: str) -> dict | None:
+    """Best-effort UPC-A → book metadata.
+
+    The UPC on a book doesn't encode the ISBN, but both catalogs often
+    index it on the edition record, so an identifier search usually
+    resolves it to a real edition. When only a work-level Open Library
+    match exists, that's returned (no ISBN — same shape search results
+    use)."""
+    for q in (f"isbn:{upc}", f'"{upc}"'):
+        for item in _google_get({"q": q, "maxResults": 5, "printType": "books"}):
+            meta = _google_volume_to_meta(item)
+            if meta["isbn13"]:
+                return lookup_isbn(meta["isbn13"]) or meta
+            if meta["title"]:
+                return meta
+
+    data = _ol_get(OPENLIBRARY_SEARCH_URL, {
+        "q": upc,
+        "limit": 3,
+        "fields": "key,title,author_name,first_publish_year,cover_i,publisher,isbn",
+    })
+    for doc in data.get("docs") or []:
+        for isbn in doc.get("isbn") or []:
+            digits = _digits(isbn)
+            if digits.startswith(("978", "979")) and _isbn13_valid(digits):
+                meta = lookup_isbn(digits)
+                if meta:
+                    return meta
+        title = doc.get("title")
+        if not title:
+            continue
+        authors = doc.get("author_name") or []
+        cover_i = doc.get("cover_i")
+        return {
+            "isbn13": None,
+            "isbn10": None,
+            "title": title,
+            "subtitle": None,
+            "authors": authors,
+            "publisher": (doc.get("publisher") or [None])[0],
+            "published_date": str(doc.get("first_publish_year") or "") or None,
+            "description": None,
+            "page_count": None,
+            "language": None,
+            "google_volume_id": None,
+            "cover_url": f"https://covers.openlibrary.org/b/id/{cover_i}-M.jpg" if cover_i else None,
+            "ol_edition_key": None,
+            "ol_work_key": (doc.get("key") or "").replace("/works/", "") or None,
+            "format": None,
+            "genre": None,
+            "norm_key": norm_key(title, authors),
+        }
+    return None
+
+
+def genre_for_edition(edition: dict) -> str | None:
+    """Best-effort genre for an already-stored edition (genre backfill).
+
+    Tries Google Books categories first — by stored volume id, then by
+    ISBN search — and falls back to the Open Library work's subjects."""
+    if edition.get("google_volume_id"):
+        genre = normalize_genre(_google_volume_by_id(edition["google_volume_id"]))
+        if genre:
+            return genre
+    isbn13 = edition.get("isbn13")
+    if not isbn13:
+        return None
+    for item in _google_get({"q": f"isbn:{isbn13}", "maxResults": 3}):
+        genre = normalize_genre((item.get("volumeInfo") or {}).get("categories"))
+        if genre:
+            return genre
+    ol = fetch_openlibrary(isbn13)
+    if ol.get("ol_work_key"):
+        return normalize_genre(fetch_ol_work_details(ol["ol_work_key"]).get("subjects"))
+    return None
 
 
 def search_openlibrary(query: str, limit: int = 12) -> list[dict]:
@@ -325,6 +505,7 @@ def search_openlibrary(query: str, limit: int = 12) -> list[dict]:
             "ol_edition_key": None,
             "ol_work_key": (doc.get("key") or "").replace("/works/", "") or None,
             "format": None,
+            "genre": None,
             "norm_key": norm_key(title, authors),
         })
     return results

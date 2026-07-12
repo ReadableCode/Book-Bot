@@ -79,6 +79,12 @@ docker compose -f docker_compose_projects.yaml restart swag      # loads bookbot
 # Running the script from a host shell silently falls back to dev mode
 # and writes to a local SQLite file instead of book_bot.users.
 docker compose -f docker_compose_projects.yaml exec book-bot uv run python scripts/create_user.py --username beca --password '...'
+
+# libraries + membership are managed the same way (also container-side —
+# it uses the superuser POSTGRES_* env, bypassing the API and RLS):
+docker compose -f docker_compose_projects.yaml exec book-bot uv run python scripts/manage_library.py list
+docker compose -f docker_compose_projects.yaml exec book-bot uv run python scripts/manage_library.py create --name 'Cabin Books' --member jason --member beca
+docker compose -f docker_compose_projects.yaml exec book-bot uv run python scripts/manage_library.py add-member --library 'Family Library' --username beca
 ```
 
 DNS: `bookbot.tinkernet.me` is covered by the existing `*.tinkernet.me`

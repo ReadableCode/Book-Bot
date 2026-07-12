@@ -23,6 +23,19 @@ from .store import HOLDING_STATUSES, READ_STATUSES, StoreError, get_store, new_i
 app = FastAPI(title="book-bot", docs_url=None, redoc_url=None)
 
 
+@app.middleware("http")
+async def no_stale_assets(request, call_next):
+    """Static responses must always revalidate. StaticFiles sends no
+    Cache-Control, and Cloudflare edge-caches extension-matched assets
+    (.js/.css/...) for hours when the origin is silent — so deploys served
+    fresh HTML with stale scripts, and the edge handed auth-gated assets to
+    anonymous requests. no-cache keeps ETag/304 revalidation cheap."""
+    response = await call_next(request)
+    if not request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 class LoginBody(BaseModel):
     username: str
     password: str
@@ -41,6 +54,11 @@ class UpdateBookBody(BaseModel):
     notes: str | None = None
     format: str | None = None
     copies: int | None = None
+    genre: str | None = None
+
+
+class EnrichGenresBody(BaseModel):
+    limit: int = 12
 
 
 class LibraryBody(BaseModel):
@@ -294,21 +312,32 @@ def api_lookup(code: str, auth: AuthContext = Depends(require_auth)):
     norm = metadata.normalize_code(code)
     if not norm["ok"]:
         return {"ok": False, "reason": norm["reason"]}
-    isbn13 = norm["isbn13"]
     store = get_store()
 
+    meta = None
+    if norm.get("upc"):
+        # UPC barcodes don't encode the ISBN — resolve via catalog identifier search
+        meta = metadata.lookup_upc(norm["upc"])
+        if meta is None:
+            return {"ok": True, "isbn13": None, "found": False, "metadata": None,
+                    "ownership": {"exact": None, "related": [], "work": None, "read_state": None}}
+        isbn13 = meta.get("isbn13")
+    else:
+        isbn13 = norm["isbn13"]
+
     # the shared catalog doubles as a metadata cache
-    existing = store.get_edition_by_isbn(auth.token, isbn13)
+    existing = store.get_edition_by_isbn(auth.token, isbn13) if isbn13 else None
     if existing:
         meta = {k: existing.get(k) for k in (
             "isbn13", "isbn10", "title", "subtitle", "publisher", "published_date",
             "description", "format", "cover_url", "google_volume_id",
-            "ol_edition_key", "page_count", "language")}
+            "ol_edition_key", "page_count", "language", "genre")}
         meta["authors"] = [a.strip() for a in (existing.get("authors") or "").split(",") if a.strip()]
         return {"ok": True, "isbn13": isbn13, "found": True, "metadata": meta,
                 "ownership": _ownership(auth, meta, edition=existing)}
 
-    meta = metadata.lookup_isbn(isbn13)
+    if meta is None:
+        meta = metadata.lookup_isbn(isbn13)
     if meta is None:
         return {"ok": True, "isbn13": isbn13, "found": False, "metadata": None,
                 "ownership": {"exact": None, "related": [], "work": None, "read_state": None}}
@@ -333,16 +362,21 @@ def api_search(q: str, auth: AuthContext = Depends(require_auth)):
 
     # An ISBN typed into the search box gets a direct lookup — free-text
     # search misses ISBNs for editions the catalogs haven't cross-indexed.
+    # A UPC gets the same treatment via the catalogs' identifier indexes.
     norm = metadata.normalize_code(q)
-    if norm["ok"]:
+    if norm.get("isbn13"):
         q = norm["isbn13"]
     local = [_flatten_book(h) for h in store.list_library_books(auth.token, library_ids)]
     local = [item for item in local if _matches_query(item, q)]
     _annotate_read_status(auth, local)
 
     external = []
-    if norm["ok"]:
+    if norm.get("isbn13"):
         meta = metadata.lookup_isbn(norm["isbn13"])
+        if meta:
+            external = [meta]
+    elif norm.get("upc"):
+        meta = metadata.lookup_upc(norm["upc"])
         if meta:
             external = [meta]
     if not external:
@@ -411,6 +445,7 @@ def _resolve_edition(auth: AuthContext, meta: dict, fmt: str | None) -> dict:
         "ol_edition_key": meta.get("ol_edition_key"),
         "page_count": meta.get("page_count"),
         "language": meta.get("language"),
+        "genre": meta.get("genre"),
         "added_at": now_iso(),
     })
 
@@ -493,10 +528,16 @@ def api_update_book(book_id: str, body: UpdateBookBody, auth: AuthContext = Depe
         fields["notes"] = body.notes
     if body.copies is not None:
         fields["copies"] = max(1, body.copies)
+    # format and genre live on the shared catalog edition, not the holding
     edition = book.get("edition") or {}
+    edition_fields = {}
     if body.format is not None and body.format != edition.get("format"):
-        edition = store.update_edition(auth.token, book["edition_id"], {"format": body.format or None})
-    if not fields and body.format is None:
+        edition_fields["format"] = body.format or None
+    if body.genre is not None and body.genre != edition.get("genre"):
+        edition_fields["genre"] = body.genre
+    if edition_fields:
+        edition = store.update_edition(auth.token, book["edition_id"], edition_fields)
+    if not fields and not edition_fields:
         raise HTTPException(400, "nothing to update")
     updated = store.update_library_book(auth.token, book_id, fields) if fields else book
     return {"book": _flatten_book({**updated, "edition": edition})}
@@ -601,6 +642,44 @@ def api_delete_read(work_id: str, auth: AuthContext = Depends(require_auth)):
         raise HTTPException(404, "no read state for this work")
     store.delete_read_state(auth.token, auth.user_id, work_id)
     return {"deleted": True}
+
+
+# --------------------------------------------------------------------------
+# genre enrichment
+# --------------------------------------------------------------------------
+
+@app.post("/api/enrich/genres")
+def api_enrich_genres(body: EnrichGenresBody | None = None, auth: AuthContext = Depends(require_auth)):
+    """Backfill genres for catalog editions my libraries hold that predate
+    genre support (or whose sources had none). Works in small batches so
+    the frontend can poll until remaining hits 0. Editions no source knows
+    a genre for are marked with '' (tried, unknown) so they aren't retried
+    forever. The response lists affected *holdings* — that's the id the
+    shelves views key their books by."""
+    limit = max(1, min(30, body.limit if body else 12))
+    store = get_store()
+    holdings = store.list_library_books(auth.token, _library_ids(auth))
+    # null genre = never tried; '' = tried and unknown (skip those).
+    # physical shelves enrich first — they're what the shelf views show.
+    rank = {"library": 0, "digital": 1, "wishlist": 2}
+    pending, holdings_by_edition = [], {}
+    for holding in sorted(holdings, key=lambda h: rank.get(h["status"], 3)):
+        edition = holding.get("edition") or {}
+        if not edition.get("id"):
+            continue
+        holdings_by_edition.setdefault(edition["id"], []).append(holding["id"])
+        if edition.get("genre") is None and len(holdings_by_edition[edition["id"]]) == 1:
+            pending.append(edition)
+    updated = []
+    for edition in pending[:limit]:
+        try:
+            genre = metadata.genre_for_edition(edition) or ""
+        except Exception:
+            genre = ""  # one flaky external lookup shouldn't kill the batch
+        store.update_edition(auth.token, edition["id"], {"genre": genre})
+        for holding_id in holdings_by_edition[edition["id"]]:
+            updated.append({"id": holding_id, "genre": genre})
+    return {"updated": updated, "remaining": max(0, len(pending) - min(limit, len(pending)))}
 
 
 # --------------------------------------------------------------------------

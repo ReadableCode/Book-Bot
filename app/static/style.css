@@ -404,3 +404,350 @@ main#views {
 @media (min-width: 641px) {
   .bottombar { border-left: 1px solid var(--border); border-right: 1px solid var(--border); }
 }
+
+/* ============================================================
+   shelves — 3D virtual bookcase (the showpiece view)
+   Terminal-navy everywhere else stays flat; this view alone is
+   allowed subtle depth: planks, spines, contact shadows.
+   ============================================================ */
+
+/* -- head: title, count, grouping control (sticky under the topbar) -- */
+
+.shelves-head {
+  position: sticky;
+  top: calc(39px + env(safe-area-inset-top)); /* tucks just under .topbar */
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: .4rem .8rem;
+  background: var(--bg);
+  padding: .9rem 0 .65rem;
+}
+.shelves-head h2 { margin: 0; flex: 1 1 auto; }
+.shelves-count { color: var(--muted); font-size: .72rem; }
+
+.seg {
+  flex: 1 1 100%;
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+.seg-btn {
+  flex: 1;
+  background: none;
+  border: none;
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: .78rem;
+  text-transform: lowercase;
+  padding: .42rem 0;
+  cursor: pointer;
+  transition: color .15s ease, background .15s ease;
+}
+.seg-btn.active {
+  color: var(--green-bright);
+  background: rgba(86, 211, 100, .09);
+  box-shadow: inset 0 0 0 1px rgba(86, 211, 100, .25);
+}
+
+/* -- the case: side rails + faint vignette -- */
+
+.bookcase {
+  --book-w: clamp(56px, 9vw, 92px);
+  --book-h: calc(var(--book-w) * 1.5);
+  --shelf-gap: 5px;
+  position: relative;
+  perspective: 1400px;
+  padding: .3rem 12px 2.2rem;
+  background: radial-gradient(120% 90% at 50% 25%, transparent 55%, rgba(0, 0, 0, .16));
+  border-radius: 4px;
+  /* small groups sit side by side like bookcase compartments; planks in a
+     row share a baseline so they read as one shelf line */
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  column-gap: 1.5rem;
+}
+
+/* the shelves view alone escapes the 640px phone column on big screens */
+#app.lib-wide { max-width: 1400px; }
+
+/* -- the 3D world: a WebGL canvas that fills the view -- */
+
+.world3d {
+  position: relative;
+  height: max(420px, calc(100dvh - 245px - env(safe-area-inset-top) - env(safe-area-inset-bottom)));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: #0a0e16;
+  touch-action: none;      /* the canvas owns all gestures */
+  cursor: grab;
+}
+.world3d:active { cursor: grabbing; }
+.world3d canvas { display: block; width: 100%; height: 100%; }
+
+.world3d-hint {
+  position: absolute;
+  left: 50%; bottom: 14px;
+  transform: translateX(-50%);
+  z-index: 2;
+  pointer-events: none;
+  white-space: nowrap;
+  font-size: .68rem;
+  color: var(--ink-2);
+  background: rgba(13, 20, 32, .72);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: .35rem .8rem;
+  backdrop-filter: blur(6px);
+  transition: opacity .8s ease;
+}
+.world3d-hint.gone { opacity: 0; }
+.bookcase::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, transparent, rgba(148, 163, 184, .18) 10%, rgba(148, 163, 184, .18) 90%, transparent) left top / 1px 100% no-repeat,
+    linear-gradient(180deg, transparent, rgba(148, 163, 184, .18) 10%, rgba(148, 163, 184, .18) 90%, transparent) right top / 1px 100% no-repeat;
+}
+
+/* -- group labels -- */
+
+.shelf-group {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  margin-bottom: 1.1rem;
+}
+.shelf-label {
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+  font-size: .74rem;
+  color: var(--muted);
+  text-transform: lowercase;
+  margin: 1rem 2px .1rem;
+}
+.shelf-label .shelf-n {
+  font-size: .64rem;
+  padding: .08rem .45rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--ink-2);
+}
+
+/* -- a shelf row: books standing on a plank -- */
+
+.shelf {
+  position: relative;
+  padding: .85rem 6px 16px; /* bottom 16px = plank surface (7) + front edge (9) */
+}
+.shelf-books {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--shelf-gap);
+  min-height: var(--book-h);
+}
+/* plank top surface — a lit strip the books stand on */
+.shelf::before {
+  content: "";
+  position: absolute;
+  left: 1px; right: 1px; bottom: 9px;
+  height: 7px;
+  background: linear-gradient(180deg, #2a3a56, #1e2a40);
+  border-top: 1px solid rgba(227, 179, 65, .10); /* faint warm edge highlight */
+  pointer-events: none;
+}
+/* plank front edge */
+.shelf::after {
+  content: "";
+  position: absolute;
+  left: -3px; right: -3px; bottom: 0;
+  height: 9px;
+  background: linear-gradient(180deg, #223049, #16202f);
+  border: 1px solid var(--border);
+  border-radius: 2px 2px 3px 3px;
+  box-shadow: 0 7px 14px rgba(0, 0, 0, .35);
+  pointer-events: none;
+}
+
+/* -- a book: outer node is the Flip target (never transformed by us);
+      the inner wrapper carries the 3D pose + hover, so they never fight -- */
+
+.book3d {
+  position: relative;
+  flex: none;
+  width: var(--book-w);
+  height: var(--book-h);
+  perspective: 1000px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.book3d:focus-visible {
+  outline: 1px solid rgba(86, 211, 100, .6);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+/* soft contact shadow pooling on the plank */
+.book3d::after {
+  content: "";
+  position: absolute;
+  left: 6%; right: 6%; bottom: -6px;
+  height: 9px;
+  background: radial-gradient(50% 100% at 50% 0, rgba(0, 0, 0, .42), transparent 72%);
+  pointer-events: none;
+}
+
+.book3d-inner {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+  -webkit-transform-style: preserve-3d;
+  transform: rotateY(24deg) rotateX(-5deg); /* angled: cover + spine + a sliver of page-top */
+  transition: transform .3s ease;
+}
+@media (hover: hover) and (pointer: fine) {
+  .book3d:hover .book3d-inner {
+    transform: rotateY(6deg) rotateX(-2deg) translateZ(26px) translateY(-3px);
+  }
+  .book3d:hover .bf-cover,
+  .book3d:hover .bf-cloth { filter: brightness(1.12); }
+}
+
+/* front board (cover or cloth) — flat leaf, safe to clip */
+.bf-front {
+  position: absolute;
+  inset: 0;
+  transform: translateZ(var(--th));
+  background: var(--cloth);
+  border-radius: 2px 4px 4px 2px;
+  overflow: hidden;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, .05),
+    8px 12px 22px rgba(0, 0, 0, .28);
+}
+.bf-cover {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: filter .3s ease;
+}
+.bf-front.cloth .bf-cover { display: none; }
+
+/* cloth-bound fallback front: embossed title on tinted book cloth */
+.bf-cloth {
+  display: none;
+  position: absolute;
+  inset: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: .35rem;
+  padding: .55rem .35rem;
+  text-align: center;
+  background:
+    repeating-linear-gradient(45deg, rgba(255, 255, 255, .022) 0 2px, transparent 2px 4px),
+    linear-gradient(155deg, var(--cloth-lite) 0%, var(--cloth) 45%, var(--cloth-deep) 100%);
+  box-shadow: inset 4px 0 7px rgba(0, 0, 0, .28); /* hinge groove by the spine */
+  transition: filter .3s ease;
+}
+.bf-front.cloth .bf-cloth { display: flex; }
+.bf-cloth-title {
+  font-size: .58rem;
+  font-weight: 700;
+  line-height: 1.35;
+  letter-spacing: .03em;
+  color: rgba(255, 255, 255, .88);
+  text-shadow: 0 -1px 0 rgba(0, 0, 0, .45), 0 1px 0 rgba(255, 255, 255, .10);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+}
+.bf-cloth-rule {
+  width: 55%;
+  height: 1px;
+  background: rgba(255, 255, 255, .28);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, .35);
+}
+.bf-cloth-author {
+  font-size: .5rem;
+  line-height: 1.3;
+  color: rgba(255, 255, 255, .62);
+  text-shadow: 0 -1px 0 rgba(0, 0, 0, .4);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* spine — left face, thickness from page count, tinted like the cloth */
+.bf-spine {
+  position: absolute;
+  top: 0; left: 0;
+  width: var(--th);
+  height: 100%;
+  transform-origin: left center;
+  transform: rotateY(-90deg);
+  background: linear-gradient(90deg, var(--cloth-deep), var(--cloth) 55%, var(--cloth-deep));
+  border-radius: 2px 0 0 2px;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  overflow: hidden;
+  display: flex;
+  justify-content: center;
+}
+.bf-spine span {
+  writing-mode: vertical-rl;
+  font-size: clamp(6px, calc(var(--th) * .5), 9px);
+  letter-spacing: .05em;
+  color: rgba(255, 255, 255, .78);
+  padding-top: 7px;
+  max-height: calc(100% - 12px);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* page block on top — visible as a sliver thanks to the rotateX tilt */
+.bf-top {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%;
+  height: var(--th);
+  transform-origin: center top;
+  transform: rotateX(90deg);
+  background:
+    repeating-linear-gradient(90deg, rgba(0, 0, 0, .06) 0 1px, transparent 1px 3px),
+    linear-gradient(90deg, #a9a392, #d6d0bd 14%, #cfc8b4 86%, #9d9786);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+/* -- responsive + motion preferences -- */
+
+@media (max-width: 640px) {
+  .bookcase {
+    --book-w: clamp(46px, 12.5vw, 62px);
+    --shelf-gap: 6px;
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .book3d-inner, .bf-cover, .bf-cloth, .seg-btn { transition: none; }
+  .book3d:hover .book3d-inner { transform: rotateY(24deg) rotateX(-5deg); }
+}
