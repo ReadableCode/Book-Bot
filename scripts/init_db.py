@@ -1,9 +1,9 @@
 """Idempotent book_bot schema/role setup for the shared apps database.
 
 Run as the postgres superuser (POSTGRES_* env vars). Equivalent to applying
-deploy/01_create_role.sql + 02_schema.sql + 03_secure_users.sql, but safe to
-re-run: the container entrypoint calls this on every start, the way load-log
-runs `alembic upgrade head`.
+deploy/01_create_role.sql + 02_schema.sql + 03_secure_users.sql +
+04_user_libraries.sql, but safe to re-run: the container entrypoint calls
+this on every start, the way load-log runs `alembic upgrade head`.
 
 Expects the cluster-global PostgREST roles (postgrest_authenticator,
 web_anon) to already exist — they're created once by load-log's
@@ -48,7 +48,7 @@ def main():
             )
         print("[init_db] ensuring book_bot_user role")
         cur.execute(ROLE_SQL)
-        for name in ("02_schema.sql", "03_secure_users.sql"):
+        for name in ("02_schema.sql", "03_secure_users.sql", "04_user_libraries.sql"):
             print(f"[init_db] applying deploy/{name}")
             with open(os.path.join(deploy_dir, name)) as f:
                 cur.execute(f.read())

@@ -7,10 +7,12 @@ to whatever backend the .env selects — point POSTGREST_URL at prod and it
 seeds prod; leave it unset and it seeds the local SQLite db.
 
 Auth: mints a JWT with the shared secret (same claims dev-mode login
-issues), so no username/password is needed.
+issues), so no password is needed — but books now live in a user's
+library, so pass --username to say whose library gets seeded (their
+first library, auto-created if they have none).
 
-    uv run python scripts/seed_books.py                # 300 books
-    uv run python scripts/seed_books.py --count 50 --dry-run
+    uv run python scripts/seed_books.py --username beca            # 300 books
+    uv run python scripts/seed_books.py --username beca --count 50 --dry-run
 """
 
 import argparse
@@ -26,7 +28,8 @@ import requests
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import config, metadata  # noqa: E402
-from app.main import AddBookBody, api_add_book  # noqa: E402
+from app.auth import AuthContext  # noqa: E402
+from app.main import AddBookBody, _ensure_libraries, api_add_book  # noqa: E402
 from app.store import get_store  # noqa: E402
 
 SEARCH_URL = "https://openlibrary.org/search.json"
@@ -82,16 +85,32 @@ def genre_accepts(genre: str, doc: dict) -> bool:
     return dom in FICTION_FAMILY or dom is None
 
 
-def mint_token() -> str:
+def mint_token(user_id: str) -> str:
     return jwt.encode(
         {
             "role": f"{config.APP_SCHEMA}_user",
-            "user_id": "seed-script",
+            "user_id": user_id,
             "exp": datetime.now(timezone.utc) + timedelta(hours=2),
         },
         config.JWT_SECRET,
         algorithm="HS256",
     )
+
+
+def resolve_auth(username: str) -> AuthContext:
+    """Books belong to a library, libraries to users — resolve whose
+    shelves we're filling and mint their token."""
+    store = get_store()
+    if config.MODE == "dev":
+        user = store.get_user(username)
+    else:
+        # the user directory is readable by any authenticated token
+        bootstrap = mint_token("00000000-0000-0000-0000-000000000000")
+        user = store.find_user_by_username(bootstrap, username)
+    if not user:
+        sys.exit(f"no user named {username!r} — create one with scripts/create_user.py first")
+    user_id = str(user["id"])
+    return AuthContext(token=mint_token(user_id), user_id=user_id)
 
 
 def pick_isbn13(candidates: list[str]) -> str | None:
@@ -198,17 +217,18 @@ def fetch_subject(genre: str, query: str, want: int, seen: set) -> list[dict]:
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--username", required=True, help="whose library to seed")
     parser.add_argument("--count", type=int, default=300)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
-    token = mint_token()
-    store = get_store()
+    auth = resolve_auth(args.username)
     print(f"mode={config.MODE} target={config.POSTGREST_URL or config.SQLITE_PATH}")
 
-    # preflight: fail before fetching anything if the token/store is broken
-    store.list_editions(token, q="zzz-preflight-no-match")
-    print("store preflight ok")
+    # preflight: fail before fetching anything if the token/store is broken.
+    # Also provisions the user's library if they don't have one yet.
+    library = _ensure_libraries(auth, username=args.username)[0]
+    print(f"store preflight ok — seeding into {library['name']!r}")
 
     per_genre = args.count // len(SUBJECTS)
     seen: set = set()
@@ -230,7 +250,7 @@ def main():
             continue
         try:
             body = AddBookBody(status="library", metadata=meta, format=rng.choice(formats))
-            result = api_add_book(body, token)
+            result = api_add_book(body, auth)
             existed += 1 if result["existed"] else 0
             added += 0 if result["existed"] else 1
         except Exception as exc:
