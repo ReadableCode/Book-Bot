@@ -31,6 +31,24 @@ if not JWT_SECRET:
 
 JWT_TTL_HOURS = int(os.environ.get("JWT_TTL_HOURS", "720"))  # dev-mode logins
 
+# self-signup (open by default now that the app owns its own login
+# hardening; set SIGNUP_ENABLED=false to go invite-only via create_user.py)
+SIGNUP_ENABLED = os.environ.get("SIGNUP_ENABLED", "true").strip().lower() not in ("0", "false", "no")
+
+# The shared, view-only Sample Library: one library row with a fixed uuid
+# that every logged-in user can browse and nobody can edit (RLS read
+# policies in deploy/05_sample_library.sql key on this exact id, so it is
+# not configurable per-env). scripts/seed_sample_library.py fills it from
+# the SAMPLE_BOOKS_PATH manifest.
+SAMPLE_LIBRARY_ID = "11111111-1111-1111-1111-111111111111"
+SAMPLE_LIBRARY_NAME = "Sample Library"
+SAMPLE_BOOKS_PATH = os.environ.get(
+    "SAMPLE_BOOKS_PATH", os.path.join(os.path.dirname(__file__), "sample_books.json"))
+
+# stock the sample library at startup when it's empty (app/bootstrap.py);
+# false = only ever stock via scripts/seed_sample_library.py
+SAMPLE_AUTOSTOCK = os.environ.get("SAMPLE_AUTOSTOCK", "true").strip().lower() not in ("0", "false", "no")
+
 _DEFAULT_SQLITE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "book_bot.db")
 SQLITE_PATH = os.environ.get("SQLITE_PATH", _DEFAULT_SQLITE)
 

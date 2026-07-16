@@ -148,7 +148,7 @@
       img.addEventListener("error", () => el.querySelector(".bf-front").classList.add("cloth"), { once: true });
     }
 
-    const open = () => openEditionSheet(b.id);
+    const open = () => openShelfBook(b);
     el.addEventListener("click", open);
     el.addEventListener("keydown", (e) => {
       if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); }
@@ -352,7 +352,7 @@
     loading = true;
     let fresh;
     try {
-      const data = await api("/api/books?status=library");
+      const data = await api(`/api/books?status=library${shelfLibraryScope()}`);
       fresh = data.items || [];
     } catch (err) {
       loading = false;

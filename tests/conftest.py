@@ -20,12 +20,19 @@ from app import store as store_module  # noqa: E402
 def client(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
 
+    from app import main as main_module
     from app.main import app
+    from app.security import LoginRateLimiter
 
     monkeypatch.setattr(config, "MODE", "dev")
     monkeypatch.setattr(config, "SQLITE_PATH", str(tmp_path / "book_bot.db"))
     monkeypatch.setattr(config, "JWT_SECRET", "test-secret")
     monkeypatch.setattr(store_module, "_store", None)
+    # the rate limiters are process-global; tests must not lock each other out
+    monkeypatch.setattr(main_module, "login_limiter", LoginRateLimiter())
+    monkeypatch.setattr(main_module, "signup_limiter", LoginRateLimiter())
+    # no startup auto-stocking: tests stock the sample shelf explicitly
+    monkeypatch.setattr(config, "SAMPLE_AUTOSTOCK", False)
     # no network in tests
     monkeypatch.setattr(metadata, "lookup_isbn", lambda isbn13: None)
     monkeypatch.setattr(metadata, "search_external", lambda q, limit=12: [])

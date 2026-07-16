@@ -120,6 +120,8 @@ input:focus, textarea:focus, select:focus { border-color: var(--green); }
 input::placeholder { color: var(--muted); }
 
 .form-error { color: var(--dot-red); font-size: .8rem; margin: .4rem 0 .7rem; }
+.auth-toggle { display: block; margin: .8rem auto 0; }
+.sheet .hint { color: var(--muted); font-size: .78rem; line-height: 1.6; margin: .5rem 0 0; }
 
 /* ---------- app shell ---------- */
 

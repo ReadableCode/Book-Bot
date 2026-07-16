@@ -11,16 +11,53 @@ together; each user additionally has private per-work read states
 """
 
 import os
+from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, metadata
+from . import accounts, bootstrap, config, metadata, security
 from .auth import AuthContext, decode_token, login, require_auth
+from .security import LoginRateLimiter, client_ip
 from .store import HOLDING_STATUSES, READ_STATUSES, StoreError, get_store, new_id, now_iso
 
-app = FastAPI(title="book-bot", docs_url=None, redoc_url=None)
+
+@asynccontextmanager
+async def _lifespan(app):
+    # converge the database on every startup, however the app is run —
+    # local uvicorn or container alike (schema + sample library; both
+    # idempotent and best-effort, see app/bootstrap.py)
+    bootstrap.run()
+    yield
+
+
+app = FastAPI(title="book-bot", docs_url=None, redoc_url=None, lifespan=_lifespan)
+
+# app-level brute-force protection now that Authelia no longer fronts the
+# app (same policy Sync_Plex uses: 5 failures / 15 min locks the key)
+login_limiter = LoginRateLimiter()
+signup_limiter = LoginRateLimiter()
+
+
+@app.middleware("http")
+async def security_headers(request, call_next):
+    """Edge hardening that used to come with the Authelia/SWAG include.
+    TLS/HSTS stay at the proxy; these are the app's own responsibility.
+    CSP: everything is served from here (vendored JS, local CSS), covers
+    load from the book catalogs' CDNs, and the PWA needs workers."""
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' https: data: blob:; media-src 'self' blob:; "
+        "connect-src 'self'; worker-src 'self' blob:; "
+        "frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+    )
+    return response
 
 
 @app.middleware("http")
@@ -128,10 +165,53 @@ def _target_library(auth: AuthContext, library_id: str | None) -> str:
     return library_id
 
 
+def _check_lockout(limiter: LoginRateLimiter, *keys: str) -> None:
+    remaining = limiter.locked_for(*keys)
+    if remaining:
+        raise HTTPException(
+            429, f"too many attempts — locked for {int(remaining // 60) + 1} more minute(s)")
+
+
 @app.post("/api/login")
-def api_login(body: LoginBody):
-    token = login(body.username.strip(), body.password)
-    _ensure_libraries(decode_token(token), username=body.username.strip())
+def api_login(body: LoginBody, request: Request):
+    username = body.username.strip()  # exact-match: pre-signup accounts may be mixed-case
+    keys = (f"user:{username.lower()}", f"ip:{client_ip(request)}")
+    _check_lockout(login_limiter, *keys)
+    try:
+        token = login(username, body.password)
+    except HTTPException as exc:
+        if exc.status_code == 401:
+            login_limiter.record_failure(*keys)
+        raise
+    login_limiter.record_success(*keys)
+    _ensure_libraries(decode_token(token), username=username)
+    return {"token": token}
+
+
+class SignupBody(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/api/signup")
+def api_signup(body: SignupBody, request: Request):
+    """Create an account and give it an empty personal library. The
+    shared Sample Library is visible to every account for browsing."""
+    if not config.SIGNUP_ENABLED:
+        raise HTTPException(403, "signups are disabled — ask for an invite")
+    ip_key = f"ip:{client_ip(request)}"
+    _check_lockout(signup_limiter, ip_key)
+    try:
+        username = security.validate_username(body.username)
+        security.validate_password(body.password)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    # every attempt counts: signup has no "failure" a caller shouldn't
+    # control, so the limiter throttles account-creation churn per IP
+    signup_limiter.record_failure(ip_key)
+    accounts.create_user(username, body.password)
+    token = login(username, body.password)
+    _ensure_libraries(decode_token(token), username=username)
     return {"token": token}
 
 
@@ -147,13 +227,13 @@ def api_me(auth: AuthContext = Depends(require_auth)):
             {"user_id": str(m["user_id"]), "username": m["username"], "role": m["role"]})
         if str(m["user_id"]) == str(auth.user_id):
             username = m["username"]
-    return {
-        "user_id": auth.user_id,
-        "username": username,
-        "libraries": [
-            {**lib, "members": by_library.get(str(lib["id"]), [])} for lib in libraries
-        ],
-    }
+    out = [{**lib, "members": by_library.get(str(lib["id"]), [])} for lib in libraries]
+    # the shared Sample Library rides along read-only for everyone (last,
+    # so the user's own library stays the default selection)
+    sample = store.get_library(auth.token, config.SAMPLE_LIBRARY_ID)
+    if sample:
+        out.append({**sample, "role": "viewer", "members": []})
+    return {"user_id": auth.user_id, "username": username, "libraries": out}
 
 
 @app.post("/api/libraries")
@@ -487,7 +567,15 @@ def api_list_books(status: str | None = None, q: str | None = None,
                    library_id: str | None = None, auth: AuthContext = Depends(require_auth)):
     if status is not None and status not in HOLDING_STATUSES:
         raise HTTPException(400, f"status must be one of {', '.join(HOLDING_STATUSES)}")
-    library_ids = [_target_library(auth, library_id)] if library_id else _library_ids(auth)
+    if library_id == config.SAMPLE_LIBRARY_ID:
+        # the shared Sample Library is browsable by everyone (view only —
+        # every write path resolves through _target_library, which knows
+        # nothing of it)
+        library_ids = [library_id]
+    elif library_id:
+        library_ids = [_target_library(auth, library_id)]
+    else:
+        library_ids = _library_ids(auth)
     items = [_flatten_book(h) for h in
              get_store().list_library_books(auth.token, library_ids, status=status)]
     if q and q.strip():

@@ -1111,7 +1111,7 @@ import * as THREE from "./vendor/three.module.min.js";
         shadowDirty = true;
       },
       onComplete: () => {
-        openEditionSheet(rec.b.id);
+        openShelfBook(rec.b);
         // ease it home underneath the sheet
         gsap.delayedCall(0.7, () => {
           if (!rec.dead && rec.home) {
@@ -1259,7 +1259,7 @@ import * as THREE from "./vendor/three.module.min.js";
     loading = true;
     let fresh;
     try {
-      const data = await api("/api/books?status=library");
+      const data = await api(`/api/books?status=library${shelfLibraryScope()}`);
       fresh = data.items || [];
     } catch (err) {
       loading = false;

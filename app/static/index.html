@@ -31,8 +31,12 @@
           <label class="field"><span>password</span>
             <input id="login-password" type="password" autocomplete="current-password" required>
           </label>
+          <label class="field hidden" id="signup-confirm-field"><span>confirm password</span>
+            <input id="signup-confirm" type="password" autocomplete="new-password">
+          </label>
           <div id="login-error" class="form-error hidden"></div>
-          <button class="btn primary wide" type="submit">log in</button>
+          <button class="btn primary wide" type="submit" id="login-submit">log in</button>
+          <button class="link-btn auth-toggle" type="button" id="auth-toggle">new here? create an account</button>
         </form>
       </div>
     </div>
@@ -101,7 +105,8 @@
       <!-- shelves — the 3D library world (DOM bookcase as WebGL fallback) -->
       <section id="view-shelves" class="view hidden">
         <div class="shelves-head">
-          <h2><span class="slashes">//</span> my library</h2>
+          <h2><span class="slashes">//</span> shelves</h2>
+          <button id="shelves-lib-btn" class="lib-btn" title="switch / share libraries">▤ …</button>
           <div id="shelves-count" class="shelves-count"></div>
           <div class="seg" id="shelf-mode" role="tablist">
             <button data-mode="genre" class="seg-btn active" role="tab" aria-selected="true">genre</button>

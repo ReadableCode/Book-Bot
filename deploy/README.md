@@ -18,7 +18,9 @@ it runs as a container in the elitedesk stack at
   stays the default, so load-log is unaffected).
 - `server_configs/application_configs/swag/elitedesk/proxy-confs/`
   `bookbot.subdomain.conf` — SWAG reverse proxy for `bookbot.*` →
-  `book_bot:8010`, behind Authelia like loadlog.
+  `book_bot:8010`. **No Authelia anymore** (the forward-auth includes are
+  removed, same as syncplex): book-bot owns its login hardening — see
+  "login hardening & signup" below. SWAG still terminates TLS.
 - `dotfiles/deploy_manifest.yaml` (`book_bot_env` entry) — symlinks this
   repo's `.env` → `personal_credentials/personal.env` on any machine with
   both repos cloned. On elitedesk that feeds the fragment's
@@ -29,13 +31,25 @@ it runs as a container in the elitedesk stack at
 
 ## schema setup is automatic
 
-The container entrypoint runs `scripts/init_db.py` before uvicorn starts
-(book-bot's `alembic upgrade head`): it idempotently creates the
-`book_bot_user` role and applies `02_schema.sql` + `03_secure_users.sql`
-+ `04_user_libraries.sql`. The numbered SQL files remain runnable by hand
-(`psql -U postgres -d apps -f ...`) if you prefer; `01_create_role.sql`
-is the manual, non-idempotent equivalent of the role block in init_db.py.
-The cluster-global roles (`postgrest_authenticator`, `web_anon`) must
+The app converges the database itself on every startup
+(`app/bootstrap.py`, run from the FastAPI lifespan — book-bot's
+`alembic upgrade head`), **wherever it runs**: a bare `uv run uvicorn`
+on a dev machine in postgrest mode does exactly what the container
+does; docker has no special role. When the superuser `POSTGRES_*` env
+is present it checks `book_bot.deploy_meta` against
+`bootstrap.SCHEMA_VERSION` (one SELECT) and only on a mismatch — i.e.
+once per actual schema change, never per process start — creates the
+`book_bot_user` role, applies `02_schema.sql` + `03_secure_users.sql` +
+`04_user_libraries.sql` + `05_sample_library.sql`, stamps the new
+version and reloads PostgREST's schema cache. (The SQL is idempotent
+but not free: it takes exclusive locks and the cache reload disrupts
+in-flight requests, so it must not run on every boot. Bump
+`SCHEMA_VERSION` whenever the SQL files change.) Without superuser
+creds it logs a skip and serves anyway. `scripts/init_db.py [--force]`
+runs the same thing by hand, and the numbered SQL files remain runnable
+directly (`psql -U postgres -d apps -f ...`); `01_create_role.sql` is
+the manual, non-idempotent equivalent of the role block. The
+cluster-global roles (`postgrest_authenticator`, `web_anon`) must
 already exist — they do, from load-log's setup.
 
 ### the multi-user migration (04_user_libraries.sql)
@@ -63,6 +77,47 @@ Two operational notes:
 - **Restart PostgREST once after the first deploy** so its schema cache
   picks up the new tables and the `library_books → editions` /
   `read_states → works` embeddings.
+
+## login hardening & signup (why Authelia isn't needed)
+
+Book-bot fronts its own auth now, the same posture Sync_Plex ships:
+
+- **bcrypt password hashes**, checked by the postgrest-auth service in
+  prod (dev mode checks locally and pays the same bcrypt cost for
+  unknown usernames — no enumeration by timing).
+- **Rate limiting / lockout** on `/api/login`: 5 failures inside 15
+  minutes locks that username *and* that client IP for 15 minutes
+  (mirrors Authelia's regulation block). In-memory, per-process.
+- **Security headers** (CSP, `X-Frame-Options: DENY`, nosniff,
+  referrer-policy) on every response; TLS/HSTS stay at SWAG.
+- **Self-signup** at `POST /api/signup` ("create an account" on the
+  login screen): username policy `[a-z0-9][a-z0-9._-]{0,31}`, minimum
+  10-char passwords, max 5 signups per 15 minutes per IP. Set
+  `SIGNUP_ENABLED=false` to go invite-only (create_user.py still works).
+  In prod the signup insert goes straight to Postgres with the
+  superuser `POSTGRES_*` env (book_bot.users is unreachable through
+  PostgREST by design) — the same path scripts/create_user.py uses.
+
+### the sample library (05_sample_library.sql)
+
+One shared, **view-only** library that every logged-in user can browse:
+a `libraries` row with a fixed uuid
+(`11111111-1111-1111-1111-111111111111`, see `app/config.py`). No
+table/column changes — the migration only inserts that row, adds two
+SELECT-only RLS policies keyed on the fixed id (never on the name, so a
+user naming their own library "Sample Library" gains nothing), and
+excludes it from the claim-a-memberless-library path. It has no members,
+so every write policy already refuses it; in the app it shows up last in
+`/api/me` with `role: "viewer"` and the frontend is strictly
+browse-only for it.
+
+Stocking is automatic and app-owned: every startup checks the shelf
+(`app/bootstrap.py`, in a background thread so boot isn't blocked) and
+fills it with the 300 well-known books from `app/sample_books.json` the
+first time, no-op forever after. Set `SAMPLE_AUTOSTOCK=false` to opt a
+process out. Rebuild the manifest with
+`scripts/build_sample_library.py`, and top up an already-stocked shelf
+with `scripts/seed_sample_library.py --force`.
 
 ## rollout on elitedesk (when ready)
 

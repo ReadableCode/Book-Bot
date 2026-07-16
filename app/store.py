@@ -117,7 +117,12 @@ class PostgrestStore:
             # SqliteStore's not-found behavior instead of surfacing a 502
             raise StoreError("not found", 404)
         if resp.status_code >= 400:
-            raise StoreError(f"database error ({resp.status_code}): {resp.text[:300]}", 502)
+            snippet = resp.text[:300]
+            # a proxy in the chain (Cloudflare/SWAG) answered with an HTML
+            # error page — don't dump markup into the UI
+            if snippet.lstrip().startswith("<"):
+                snippet = "upstream proxy error — try again in a moment"
+            raise StoreError(f"database error ({resp.status_code}): {snippet}", 502)
         if resp.text:
             return resp.json()
         return []
@@ -125,6 +130,18 @@ class PostgrestStore:
     @staticmethod
     def _in(values):
         return "in.(" + ",".join(f'"{v}"' for v in values) + ")"
+
+    # The proxy chain in front of PostgREST (Cloudflare -> SWAG/nginx)
+    # rejects request lines beyond ~4KB — about 90 quoted uuids in one
+    # in.() filter — killing the connection (surfaces as 502/520). Any
+    # query filtering on an unbounded id list must go out in chunks.
+    CHUNK_IDS = 50
+
+    @classmethod
+    def _chunks(cls, values):
+        values = list(values)
+        for i in range(0, len(values), cls.CHUNK_IDS):
+            yield values[i:i + cls.CHUNK_IDS]
 
     # -- works ------------------------------------------------------------
 
@@ -178,7 +195,10 @@ class PostgrestStore:
     def editions_for_works(self, token, work_ids):
         if not work_ids:
             return []
-        return self._request("GET", "editions", token, {"work_id": self._in(work_ids)})
+        rows = []
+        for chunk in self._chunks(work_ids):
+            rows += self._request("GET", "editions", token, {"work_id": self._in(chunk)})
+        return rows
 
     def insert_edition(self, token, edition):
         rows = self._request("POST", "editions", token, body=edition)
@@ -197,6 +217,10 @@ class PostgrestStore:
             "order": "added_at.asc",
         })
         return [{**r["library"], "role": r["role"]} for r in rows if r.get("library")]
+
+    def get_library(self, token, library_id):
+        rows = self._request("GET", "libraries", token, {"id": f"eq.{library_id}", "limit": 1})
+        return rows[0] if rows else None
 
     def create_library(self, token, library):
         # return=minimal: the caller isn't a member yet, so the row would be
@@ -231,8 +255,11 @@ class PostgrestStore:
     def usernames_for_ids(self, token, user_ids):
         if not user_ids:
             return {}
-        rows = self._request("GET", "user_directory", token, {"id": self._in(set(user_ids))})
-        return {str(r["id"]): r["username"] for r in rows}
+        names = {}
+        for chunk in self._chunks(set(user_ids)):
+            rows = self._request("GET", "user_directory", token, {"id": self._in(chunk)})
+            names.update({str(r["id"]): r["username"] for r in rows})
+        return names
 
     # -- library books (holdings) -------------------------------------------
 
@@ -263,9 +290,12 @@ class PostgrestStore:
     def holdings_for_editions(self, token, library_ids, edition_ids):
         if not library_ids or not edition_ids:
             return []
-        return self._request("GET", "library_books", token, {
-            "library_id": self._in(library_ids), "edition_id": self._in(edition_ids),
-        })
+        rows = []
+        for chunk in self._chunks(edition_ids):
+            rows += self._request("GET", "library_books", token, {
+                "library_id": self._in(library_ids), "edition_id": self._in(chunk),
+            })
+        return rows
 
     def insert_library_book(self, token, book):
         rows = self._request("POST", "library_books", token, body=book)
@@ -296,9 +326,12 @@ class PostgrestStore:
     def read_states_for_works(self, token, user_id, work_ids):
         if not work_ids:
             return []
-        return self._request("GET", "read_states", token, {
-            "user_id": f"eq.{user_id}", "work_id": self._in(work_ids),
-        })
+        rows = []
+        for chunk in self._chunks(work_ids):
+            rows += self._request("GET", "read_states", token, {
+                "user_id": f"eq.{user_id}", "work_id": self._in(chunk),
+            })
+        return rows
 
     def insert_read_state(self, token, state):
         rows = self._request("POST", "read_states", token, body=state)
@@ -465,6 +498,12 @@ class SqliteStore:
             self._conn.execute("DROP TABLE library_books_migr")
             # the old table took its indexes with it; recreate them
             self._conn.executescript(SQLITE_SCHEMA)
+        # the shared, view-only Sample Library (fixed id, no members — the
+        # app treats it as readable by everyone and writable by nobody,
+        # mirroring deploy/05_sample_library.sql)
+        self._conn.execute(
+            "INSERT OR IGNORE INTO libraries (id, name, created_at) VALUES (?, ?, ?)",
+            (config.SAMPLE_LIBRARY_ID, config.SAMPLE_LIBRARY_NAME, now_iso()))
         self._conn.commit()
 
     def _migrate_legacy(self):
@@ -610,6 +649,10 @@ class SqliteStore:
         return self._rows(
             "SELECT l.*, m.role FROM library_members m JOIN libraries l ON l.id = m.library_id "
             "WHERE m.user_id = ? ORDER BY m.added_at ASC", (user_id,))
+
+    def get_library(self, token, library_id):
+        rows = self._rows("SELECT * FROM libraries WHERE id = ?", (library_id,))
+        return rows[0] if rows else None
 
     def create_library(self, token, library):
         return self._insert("libraries", library)

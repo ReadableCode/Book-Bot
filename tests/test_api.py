@@ -20,7 +20,9 @@ def add_book(client, headers, meta, status="library", **kw):
 def test_new_user_gets_a_personal_library(client, users):
     me = client.get("/api/me", headers=users("jason")).json()
     assert me["username"] == "jason"
-    assert len(me["libraries"]) == 1
+    # own personal library plus the shared, view-only Sample Library
+    own = [lib for lib in me["libraries"] if lib["role"] != "viewer"]
+    assert len(own) == 1
     assert me["libraries"][0]["name"] == "jason's library"
     assert [m["username"] for m in me["libraries"][0]["members"]] == ["jason"]
 
@@ -83,7 +85,8 @@ def test_third_user_stays_out_of_shared_library(client, users):
     jason, new = users("jason"), users("newuser")
     add_book(client, jason, make_meta("Family Book", ISBN_A))
     me = client.get("/api/me", headers=new).json()
-    assert [lib["name"] for lib in me["libraries"]] == ["newuser's library"]
+    assert [lib["name"] for lib in me["libraries"]
+            if lib["role"] != "viewer"] == ["newuser's library"]
     assert client.get("/api/books", headers=new).json()["items"] == []
     assert client.get("/api/stats", headers=new).json()["library"] == 0
 

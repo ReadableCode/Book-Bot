@@ -6,6 +6,7 @@ import sqlite3
 
 import bcrypt
 
+from app import config
 from app import store as store_module
 
 LEGACY_SCHEMA = """
@@ -83,7 +84,9 @@ def test_legacy_sqlite_migrates_to_shared_family_library(tmp_path):
 
     store = store_module.SqliteStore(path)
 
-    libraries = store._rows("SELECT * FROM libraries")
+    # the migrated Family Library plus the always-present Sample Library
+    libraries = store._rows(
+        "SELECT * FROM libraries WHERE id != ?", (config.SAMPLE_LIBRARY_ID,))
     assert len(libraries) == 1
     assert libraries[0]["name"] == "Family Library"
 
@@ -111,7 +114,8 @@ def test_legacy_sqlite_migrates_to_shared_family_library(tmp_path):
 
     # opening the same file again is a no-op
     again = store_module.SqliteStore(path)
-    assert len(again._rows("SELECT * FROM libraries")) == 1
+    assert len(again._rows(
+        "SELECT * FROM libraries WHERE id != ?", (config.SAMPLE_LIBRARY_ID,))) == 1
     assert len(again.list_library_books(None, [libraries[0]["id"]])) == 3
 
 
@@ -159,6 +163,7 @@ def test_migrated_users_share_but_new_users_do_not(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "MODE", "dev")
     monkeypatch.setattr(config, "SQLITE_PATH", path)
     monkeypatch.setattr(config, "JWT_SECRET", "test-secret")
+    monkeypatch.setattr(config, "SAMPLE_AUTOSTOCK", False)
     monkeypatch.setattr(store_module, "_store", None)
     monkeypatch.setattr(metadata, "lookup_isbn", lambda isbn13: None)
     monkeypatch.setattr(metadata, "search_external", lambda q, limit=12: [])
@@ -174,7 +179,8 @@ def test_migrated_users_share_but_new_users_do_not(tmp_path, monkeypatch):
         # personal library is auto-created for them
         for headers in (jason, beca):
             me = client.get("/api/me", headers=headers).json()
-            assert [lib["name"] for lib in me["libraries"]] == ["Family Library"]
+            assert [lib["name"] for lib in me["libraries"]
+                    if lib["role"] != "viewer"] == ["Family Library"]
             titles = [i["title"] for i in client.get("/api/books", headers=headers).json()["items"]]
             assert titles == ["The Way of Kings"] * 3
 
@@ -183,7 +189,8 @@ def test_migrated_users_share_but_new_users_do_not(tmp_path, monkeypatch):
             "newuser", bcrypt.hashpw(b"pw", bcrypt.gensalt()).decode())
         new = login("newuser")
         me = client.get("/api/me", headers=new).json()
-        assert [lib["name"] for lib in me["libraries"]] == ["newuser's library"]
+        assert [lib["name"] for lib in me["libraries"]
+                if lib["role"] != "viewer"] == ["newuser's library"]
         assert client.get("/api/books", headers=new).json()["items"] == []
 
     store_module._store = None

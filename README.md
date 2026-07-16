@@ -66,7 +66,18 @@ inside the cover or searching by title.
 
 ## accounts + shared libraries
 
-Users log in with their own account. First login auto-creates a personal
+Users log in with their own account, or create one right from the login
+screen ("create an account" — set `SIGNUP_ENABLED=false` to go
+invite-only). The app fronts its own login hardening instead of sitting
+behind Authelia: bcrypt hashes, per-username/per-IP lockout (5 failures
+in 15 minutes), signup throttling and security headers.
+
+Everyone also sees the shared **✳ Sample Library**: one view-only shelf
+of 300 well-known books. The app stocks it automatically at startup the
+first time (`app/bootstrap.py`; a no-op once the shelf has books, from
+any process — local uvicorn or the container). Browse it from the `▤`
+button — nobody can edit it. First login
+auto-creates a personal
 library; from the library view's `▤` button you can rename it, start
 another, or share it with another user by username — members see and
 manage the same shelves. Users who existed before the multi-user

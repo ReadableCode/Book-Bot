@@ -112,10 +112,38 @@ function activeLibrary() {
   return me?.libraries.find((l) => l.id === activeLibraryId) || me?.libraries[0] || null;
 }
 
+// where adds land: never the read-only sample library — fall back to the
+// user's own first library when it's the one being browsed
+function targetLibraryId() {
+  return isSampleLibrary(activeLibrary()) ? null : (activeLibraryId || null);
+}
+
+/* ---------- hooks for the shelves views (shelf.js / shelf3d.js) ---------- */
+
+// query-string suffix scoping shelf loads to the active library (so the
+// shelves tab can show the sample library too)
+function shelfLibraryScope() {
+  return activeLibraryId ? `&library_id=${encodeURIComponent(activeLibraryId)}` : "";
+}
+
+// route a shelf book tap: manage sheet for own books, view-only sheet for
+// the sample library
+function openShelfBook(item) {
+  if (isSampleLibrary(activeLibrary())) openSampleSheet(item);
+  else openEditionSheet(item.id);
+}
+
 function renderLibraryButton() {
   const lib = activeLibrary();
   const extra = me && me.libraries.length > 1 ? " ▾" : "";
-  $("#library-btn").textContent = lib ? `▤ ${lib.name}${extra}` : "▤ …";
+  const glyph = isSampleLibrary(lib) ? "✳" : "▤";
+  const label = lib ? `${glyph} ${lib.name}${extra}` : "▤ …";
+  $("#library-btn").textContent = label;
+  $("#shelves-lib-btn").textContent = label;
+}
+
+function isSampleLibrary(lib) {
+  return lib?.role === "viewer";
 }
 
 function openLibrarySheet() {
@@ -123,14 +151,18 @@ function openLibrarySheet() {
   if (!lib) return;
   const rows = me.libraries.map((l) => `
     <div class="lib-row ${l.id === lib.id ? "active" : ""}" data-lib="${esc(l.id)}">
-      <div class="lib-name">▤ ${esc(l.name)}</div>
-      <div class="lib-members">${l.members.map((m) => esc(m.username || "?")).join(", ") || "just you"}</div>
+      <div class="lib-name">${isSampleLibrary(l) ? "✳" : "▤"} ${esc(l.name)}</div>
+      <div class="lib-members">${isSampleLibrary(l)
+        ? "shared with everyone — view only"
+        : l.members.map((m) => esc(m.username || "?")).join(", ") || "just you"}</div>
     </div>`).join("");
-  openSheet(`
-    <div class="sheet-title">my libraries</div>
-    <div class="lib-list">${rows}</div>
-    <div class="sheet-actions">
-      <label class="field"><span>rename "${esc(lib.name)}"</span>
+  const manage = isSampleLibrary(lib)
+    ? `<p class="hint">the sample library is a shared, view-only shelf of well-known
+        books — browse it, but nobody can change it.</p>
+      <div class="btnrow">
+        <button class="btn secondary" id="lib-create">+ start another library</button>
+      </div>`
+    : `<label class="field"><span>rename "${esc(lib.name)}"</span>
         <input id="lib-rename" value="${esc(lib.name)}"></label>
       <label class="field"><span>share "${esc(lib.name)}" with (username)</span>
         <input id="lib-invite" autocapitalize="none" placeholder="their book-bot username"></label>
@@ -140,8 +172,11 @@ function openLibrarySheet() {
       </div>
       <div class="btnrow">
         <button class="btn secondary" id="lib-create">+ start another library</button>
-      </div>
-    </div>`);
+      </div>`;
+  openSheet(`
+    <div class="sheet-title">my libraries</div>
+    <div class="lib-list">${rows}</div>
+    <div class="sheet-actions">${manage}</div>`);
 
   document.querySelectorAll(".lib-row").forEach((row) =>
     row.addEventListener("click", () => {
@@ -151,9 +186,10 @@ function openLibrarySheet() {
       renderLibraryButton();
       closeSheet();
       if (currentView === "library" || currentView === "wishlist") loadList(currentView);
+      if (currentView === "shelves") Shelf.enter();
       refreshStats();
     }));
-  $("#lib-rename-save").addEventListener("click", async () => {
+  $("#lib-rename-save")?.addEventListener("click", async () => {
     const name = $("#lib-rename").value.trim();
     if (!name || name === lib.name) return;
     try {
@@ -163,7 +199,7 @@ function openLibrarySheet() {
       closeSheet();
     } catch (err) { toast(err.message, "err"); }
   });
-  $("#lib-invite-btn").addEventListener("click", async () => {
+  $("#lib-invite-btn")?.addEventListener("click", async () => {
     const username = $("#lib-invite").value.trim();
     if (!username) return;
     try {
@@ -214,27 +250,53 @@ function showApp() {
   switchView(currentView);
 }
 
+let authMode = "login"; // 'login' | 'signup'
+
+$("#auth-toggle").addEventListener("click", () => {
+  authMode = authMode === "login" ? "signup" : "login";
+  const signup = authMode === "signup";
+  $("#signup-confirm-field").classList.toggle("hidden", !signup);
+  $("#login-submit").textContent = signup ? "create account" : "log in";
+  $("#auth-toggle").textContent = signup
+    ? "already have an account? log in"
+    : "new here? create an account";
+  $("#login-password").autocomplete = signup ? "new-password" : "current-password";
+  $("#login-error").classList.add("hidden");
+});
+
 $("#login-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const box = $("#login-error");
   box.classList.add("hidden");
+  const username = $("#login-username").value;
+  const password = $("#login-password").value;
   try {
-    const data = await api("/api/login", {
+    if (authMode === "signup") {
+      if (password !== $("#signup-confirm").value) throw new Error("passwords don't match");
+      $("#login-submit").disabled = true;
+      $("#login-submit").textContent = "setting up your library…";
+    }
+    const data = await api(authMode === "signup" ? "/api/signup" : "/api/login", {
       method: "POST",
-      body: JSON.stringify({
-        username: $("#login-username").value,
-        password: $("#login-password").value,
-      }),
+      body: JSON.stringify({ username, password }),
     });
     token = data.token;
     localStorage.setItem("bookbot_token", token);
     $("#login-password").value = "";
+    $("#signup-confirm").value = "";
     invalidateBooks();
     await loadMe();
     showApp();
+    if (authMode === "signup") {
+      toast("welcome! browse the shared ✳ Sample Library from the ▤ button", "ok");
+      authMode = "login";
+    }
   } catch (err) {
     box.textContent = err.message;
     box.classList.remove("hidden");
+  } finally {
+    $("#login-submit").disabled = false;
+    $("#login-submit").textContent = authMode === "signup" ? "create account" : "log in";
   }
 });
 
@@ -260,6 +322,7 @@ document.querySelectorAll(".nav-btn").forEach((btn) =>
 );
 
 $("#library-btn").addEventListener("click", openLibrarySheet);
+$("#shelves-lib-btn").addEventListener("click", openLibrarySheet);
 
 async function refreshStats() {
   try {
@@ -335,6 +398,11 @@ function openSheet(html, onClose) {
   sheetOnClose = onClose || null;
   $("#sheet").innerHTML = `<div class="sheet-grab" title="close"></div>${html}`;
   $("#sheet .sheet-grab").addEventListener("click", closeSheet);
+  const descToggle = $("#sheet-desc-toggle");
+  if (descToggle) descToggle.addEventListener("click", () => {
+    $("#sheet-desc").classList.toggle("open");
+    descToggle.textContent = descToggle.textContent === "more" ? "less" : "more";
+  });
   $("#sheet").classList.remove("hidden");
   $("#sheet-backdrop").classList.remove("hidden");
 }
@@ -411,9 +479,10 @@ function sheetHead(meta) {
 
 function descBlock(meta) {
   if (!meta.description) return "";
+  // no inline onclick: the CSP forbids inline script; openSheet binds it
   return `
     <div class="desc" id="sheet-desc">${esc(meta.description)}</div>
-    <button class="link-btn desc-toggle" onclick="document.getElementById('sheet-desc').classList.toggle('open'); this.textContent = this.textContent === 'more' ? 'less' : 'more'">more</button>`;
+    <button class="link-btn desc-toggle" id="sheet-desc-toggle">more</button>`;
 }
 
 /* ---------- reading status section (shared by all sheets) ---------- */
@@ -556,7 +625,7 @@ function openBookSheet(meta, ownership, onClose) {
         const fmt = $("#sheet-format").value || null;
         const res = await api("/api/books", {
           method: "POST",
-          body: JSON.stringify({ status, metadata: meta, format: fmt, library_id: activeLibraryId || null }),
+          body: JSON.stringify({ status, metadata: meta, format: fmt, library_id: targetLibraryId() }),
         });
         toast(res.existed ? `already saved — now ${HOLD_PHRASES[status]}` : `added — ${HOLD_PHRASES[status]} ✓`, "ok");
         refreshStats();
@@ -777,13 +846,30 @@ function renderList(view) {
       (ed.authors || "").toLowerCase().includes(filter) ||
       (ed.isbn13 || "").includes(filter));
   }
+  const sampleView = isSampleLibrary(activeLibrary());
   if (!items.length) {
-    box.innerHTML = `<div class="empty">${filter || ownFilter ? "nothing matches that filter" : view === "library" ? "no books yet — scan a barcode to start shelving" : "wishlist is empty — scan or search while shopping"}</div>`;
+    box.innerHTML = `<div class="empty">${filter || ownFilter ? "nothing matches that filter"
+      : sampleView ? "the sample library hasn't been stocked yet"
+      : view === "library" ? "no books yet — scan a barcode to start shelving"
+      : "wishlist is empty — scan or search while shopping"}</div>`;
     return;
   }
   box.innerHTML = items.map((ed) => bookCardHtml(ed, "local")).join("");
   box.querySelectorAll(".book-card").forEach((card) =>
-    card.addEventListener("click", () => openEditionSheet(card.dataset.id)));
+    card.addEventListener("click", () => {
+      if (!sampleView) return openEditionSheet(card.dataset.id);
+      // sample books are strictly view-only: metadata sheet, no actions
+      const item = items.find((ed) => String(ed.id) === card.dataset.id);
+      if (item) openSampleSheet(item);
+    }));
+}
+
+function openSampleSheet(item) {
+  openSheet(`
+    ${sheetHead(item)}
+    <div class="own-banner none">✳ sample library — view only</div>
+    ${descBlock(item)}
+  `);
 }
 
 $("#library-filter").addEventListener("input", () => renderList("library"));
@@ -885,7 +971,7 @@ function openReadSheet(item) {
               authors: (item.authors || "").split(",").map((a) => a.trim()).filter(Boolean),
               cover_url: item.cover_url,
             },
-            library_id: activeLibraryId || null,
+            library_id: targetLibraryId(),
           }),
         });
         toast("on the wishlist — happy hunting 🏆", "ok");

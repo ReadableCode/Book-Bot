@@ -21,7 +21,7 @@ import jwt
 import requests
 from fastapi import HTTPException, Request
 
-from . import config
+from . import config, security
 from .store import get_store
 
 
@@ -45,7 +45,10 @@ def login(username: str, password: str) -> str:
         return resp.json()["token"]
 
     user = get_store().get_user(username)
-    if not user or not bcrypt.checkpw(password.encode(), user["password_hash"].encode()):
+    # unknown users still pay the bcrypt cost (dummy hash) so the reject
+    # path can't be timed to enumerate usernames
+    hashed = user["password_hash"] if user else security.DUMMY_HASH
+    if not bcrypt.checkpw(password.encode(), hashed.encode()) or not user:
         raise HTTPException(401, "invalid username or password")
     payload = {
         "role": f"{config.APP_SCHEMA}_user",
