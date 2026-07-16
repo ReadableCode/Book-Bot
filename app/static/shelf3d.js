@@ -800,17 +800,21 @@ import * as THREE from "./vendor/three.module.min.js";
 
   /* ---------- bookcases (rebuilt per layout) ---------- */
 
+  function removeCases() {
+    if (!caseRoot) return;
+    scene.remove(caseRoot);
+    caseRoot.traverse((o) => {
+      if (o.isMesh) {
+        o.geometry.dispose();
+        if (o.material.map && o.material.userData.own) o.material.map.dispose();
+        if (o.material.userData.own) o.material.dispose();
+      }
+    });
+    caseRoot = null;
+  }
+
   function buildCases(layout, wood) {
-    if (caseRoot) {
-      scene.remove(caseRoot);
-      caseRoot.traverse((o) => {
-        if (o.isMesh) {
-          o.geometry.dispose();
-          if (o.material.map && o.material.userData.own) o.material.map.dispose();
-          if (o.material.userData.own) o.material.dispose();
-        }
-      });
-    }
+    removeCases();
     caseRoot = new THREE.Group();
 
     const woodMat = new THREE.MeshStandardMaterial({ map: wood, roughness: 0.72, metalness: 0.05 });
@@ -985,6 +989,12 @@ import * as THREE from "./vendor/three.module.min.js";
     if (!books || !renderer) return;
     countEl.textContent = "";
     if (!books.length) {
+      // an emptied hall (e.g. switching to an empty library) must clear
+      // the previous library's books and cases, not just the count line
+      setHover(null);
+      for (const [, rec] of [...bookNodes]) disposeBook(rec);
+      removeCases();
+      shadowDirty = true;
       countEl.textContent = "no books yet — scan a barcode and the hall fills itself";
       return;
     }
@@ -1250,10 +1260,12 @@ import * as THREE from "./vendor/three.module.min.js";
     enriching = false;
   }
 
+  let pendingEnter = false;
+
   async function enter() {
     setRunning(true);
     resize();
-    if (loading) return;
+    if (loading) { pendingEnter = true; return; }  // re-run with the latest scope after
     const first = !books;
     if (first) countEl.textContent = "opening the hall…";
     loading = true;
@@ -1264,9 +1276,11 @@ import * as THREE from "./vendor/three.module.min.js";
     } catch (err) {
       loading = false;
       if (first) countEl.textContent = `couldn't load the library — ${err.message}`;
+      if (pendingEnter) { pendingEnter = false; enter(); }
       return;
     }
     loading = false;
+    if (pendingEnter) { pendingEnter = false; enter(); return; }  // scope changed mid-fetch
     if (first || sigOf(fresh) !== sigOf(books)) {
       books = fresh;
       regroup(!first);

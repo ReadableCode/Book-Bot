@@ -340,8 +340,10 @@
   const sigOf = (list) =>
     list.map((b) => `${b.id}:${b.genre ?? ""}:${b.format ?? ""}`).sort().join("|");
 
+  let pendingEnter = false;
+
   async function enter() {
-    if (loading) return;
+    if (loading) { pendingEnter = true; return; }  // re-run with the latest scope after
     const first = !books;
     if (first) {
       caseEl.innerHTML = `<div class="empty">loading the shelves…</div>`;
@@ -358,9 +360,11 @@
       loading = false;
       // a failed refresh keeps showing the cached shelves
       if (first) caseEl.innerHTML = `<div class="empty">couldn't load the library — ${esc(err.message)}</div>`;
+      if (pendingEnter) { pendingEnter = false; enter(); }
       return;
     }
     loading = false;
+    if (pendingEnter) { pendingEnter = false; enter(); return; }  // scope changed mid-fetch
     if (first || sigOf(fresh) !== sigOf(books)) {
       books = fresh;
       preloadCovers();
