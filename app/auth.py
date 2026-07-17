@@ -31,15 +31,26 @@ class AuthContext:
     user_id: str
 
 
-def login(username: str, password: str) -> str:
+def login(username: str, password: str, client_ip: str | None = None) -> str:
     if config.MODE == "postgrest":
+        # forward the browser's IP: the auth service keeps its own per-IP
+        # lockout, and without this every book-bot user would share this
+        # container's IP in that limiter
+        headers = {"X-Forwarded-For": client_ip} if client_ip else {}
         resp = requests.post(
             f"{config.AUTH_URL}/token",
             json={"schema": config.APP_SCHEMA, "username": username, "password": password},
+            headers=headers,
             timeout=config.HTTP_TIMEOUT,
         )
         if resp.status_code == 401:
             raise HTTPException(401, "invalid username or password")
+        if resp.status_code == 429:
+            try:
+                detail = resp.json().get("detail", "")
+            except ValueError:
+                detail = ""
+            raise HTTPException(429, detail or "too many attempts — try again later")
         if resp.status_code >= 400:
             raise HTTPException(502, f"auth service error ({resp.status_code})")
         return resp.json()["token"]

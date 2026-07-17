@@ -178,7 +178,7 @@ def api_login(body: LoginBody, request: Request):
     keys = (f"user:{username.lower()}", f"ip:{client_ip(request)}")
     _check_lockout(login_limiter, *keys)
     try:
-        token = login(username, body.password)
+        token = login(username, body.password, client_ip=client_ip(request))
     except HTTPException as exc:
         if exc.status_code == 401:
             login_limiter.record_failure(*keys)
@@ -210,7 +210,7 @@ def api_signup(body: SignupBody, request: Request):
     # control, so the limiter throttles account-creation churn per IP
     signup_limiter.record_failure(ip_key)
     accounts.create_user(username, body.password)
-    token = login(username, body.password)
+    token = login(username, body.password, client_ip=client_ip(request))
     _ensure_libraries(decode_token(token), username=username)
     return {"token": token}
 
