@@ -1,11 +1,12 @@
-/* shelf3d.js — the "shelves" tab, reimagined as a real 3D world.
-   A circular library rotunda rendered with Three.js: wooden bookcases
-   arranged in an arc around you, every book a physical object bound in
-   cloth with its real cover, a skylight shaft with drifting dust, and
-   GSAP-driven flights that send books arcing through the air when the
-   grouping changes. Falls back to the DOM bookcase (ShelfDOM) when
-   WebGL isn't available. Reuses app.js globals (api, authorsOf,
-   openEditionSheet). */
+/* shelf3d.js — the "shelves" tab as a walkable first-person library.
+   A candlelit rotunda somewhere between the Beast's castle library and a
+   dark-academia reading room: towering stacks, a candle chandelier, moonlit
+   gothic windows, an enchanted rose under glass — and every book a physical
+   object bound in cloth with its real cover. You walk it in first person
+   (WASD + mouse-look on desktop, dual-thumb controls on touch); GSAP flights
+   send books arcing through the air when the grouping changes. Falls back to
+   the DOM bookcase (ShelfDOM) when WebGL isn't available. Reuses app.js
+   globals (api, authorsOf, openShelfBook). */
 
 import * as THREE from "./vendor/three.module.min.js";
 
@@ -46,6 +47,8 @@ import * as THREE from "./vendor/three.module.min.js";
   // texture regions as u-ranges on the 256px canvas
   const REG = { cloth: [0, 16], pages: [16, 32], spine: [32, 96], cover: [96, 256] };
 
+  const EYE = 1.55;         // first-person eye height
+
   /* ---------- dom ---------- */
 
   const viewEl = document.getElementById("view-shelves");
@@ -53,8 +56,13 @@ import * as THREE from "./vendor/three.module.min.js";
   const worldEl = document.getElementById("world3d");
   const caseEl = document.getElementById("bookcase");
   const hintEl = document.getElementById("world3d-hint");
+  const crossEl = document.getElementById("world3d-crosshair");
+  const focusEl = document.getElementById("world3d-focus");
+  const stickEl = document.getElementById("world3d-stick");
+  const stickNub = document.getElementById("world3d-stick-nub");
 
   const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const coarsePointer = () => window.matchMedia("(pointer: coarse)").matches;
   const viewVisible = () => !viewEl.classList.contains("hidden");
 
   /* ---------- small helpers ---------- */
@@ -178,8 +186,14 @@ import * as THREE from "./vendor/three.module.min.js";
     ctx.restore();
   }
 
-  // vertical-grain wood for the cases
-  function woodTexture(base = "#5c452e", dark = "#42311f", light = "#75593a") {
+  function srgbTex(c) {
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  }
+
+  // vertical-grain walnut for the cases and wainscot
+  function woodTexture(base = "#4a3320", dark = "#2f2013", light = "#5f452a") {
     const [c, ctx] = canvas2d(256, 512);
     const g = ctx.createLinearGradient(0, 0, 256, 0);
     g.addColorStop(0, dark); g.addColorStop(0.5, base); g.addColorStop(1, dark);
@@ -197,9 +211,8 @@ import * as THREE from "./vendor/three.module.min.js";
     }
     ctx.globalAlpha = 1;
     noise(ctx, 256, 512, 0.05);
-    const t = new THREE.CanvasTexture(c);
+    const t = srgbTex(c);
     t.wrapS = t.wrapT = THREE.RepeatWrapping;
-    t.colorSpace = THREE.SRGBColorSpace;
     return t;
   }
 
@@ -207,23 +220,23 @@ import * as THREE from "./vendor/three.module.min.js";
   function floorTexture() {
     const S = 1024;
     const [c, ctx] = canvas2d(S, S);
-    ctx.fillStyle = "#231a12";
+    ctx.fillStyle = "#1e150d";
     ctx.fillRect(0, 0, S, S);
     const cx = S / 2, cy = S / 2;
     for (let r = 30; r < S * 0.75; r += 26) {
-      ctx.strokeStyle = `rgba(${52 + Math.random() * 22},${38 + Math.random() * 15},${24 + Math.random() * 10},${0.3 + Math.random() * 0.25})`;
+      ctx.strokeStyle = `rgba(${48 + Math.random() * 22},${34 + Math.random() * 14},${20 + Math.random() * 9},${0.3 + Math.random() * 0.25})`;
       ctx.lineWidth = 22;
       ctx.beginPath();
       ctx.arc(cx, cy, r, 0, Math.PI * 2);
       ctx.stroke();
-      ctx.strokeStyle = "rgba(12,8,5,0.28)";
+      ctx.strokeStyle = "rgba(10,7,4,0.28)";
       ctx.lineWidth = 1.4;
       ctx.beginPath();
       ctx.arc(cx, cy, r + 12, 0, Math.PI * 2);
       ctx.stroke();
     }
     // radial seams
-    ctx.strokeStyle = "rgba(12,8,5,0.22)";
+    ctx.strokeStyle = "rgba(10,7,4,0.22)";
     ctx.lineWidth = 1.6;
     for (let a = 0; a < Math.PI * 2; a += Math.PI / 14) {
       ctx.beginPath();
@@ -231,21 +244,20 @@ import * as THREE from "./vendor/three.module.min.js";
       ctx.lineTo(cx + Math.cos(a) * S, cy + Math.sin(a) * S);
       ctx.stroke();
     }
-    // warm pool of light in the middle, vignette at the rim
+    // warm pool of candlelight in the middle, vignette at the rim
     const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, S * 0.55);
-    glow.addColorStop(0, "rgba(255,190,110,0.10)");
-    glow.addColorStop(0.45, "rgba(255,190,110,0.02)");
+    glow.addColorStop(0, "rgba(255,186,102,0.10)");
+    glow.addColorStop(0.45, "rgba(255,186,102,0.02)");
     glow.addColorStop(1, "rgba(0,0,0,0.55)");
     ctx.fillStyle = glow;
     ctx.fillRect(0, 0, S, S);
     noise(ctx, S, S, 0.04, 3000);
-    const t = new THREE.CanvasTexture(c);
-    t.colorSpace = THREE.SRGBColorSpace;
+    const t = srgbTex(c);
     t.anisotropy = 8;
     return t;
   }
 
-  // soft round sprite for dust motes
+  // soft round sprite for dust motes, candle flames, halos
   function dustTexture() {
     const [c, ctx] = canvas2d(32, 32);
     const g = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
@@ -271,11 +283,173 @@ import * as THREE from "./vendor/three.module.min.js";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     let label = text.toLowerCase() + (n ? ` · ${n}` : "");
-    ctx.font = "600 26px ui-monospace, Menlo, Consolas, monospace";
+    ctx.font = "600 26px Georgia, 'Times New Roman', serif";
     while (ctx.measureText(label).width > 230 && label.length > 4) label = label.slice(0, -2).trim() + "…";
     ctx.fillText(label, 128, 34);
-    const t = new THREE.CanvasTexture(c);
-    t.colorSpace = THREE.SRGBColorSpace;
+    return srgbTex(c);
+  }
+
+  // the illusion of towering upper stacks: two shadowed shelf rows of
+  // anonymous spines, tiled around the rotunda above the real cases
+  function stacksTexture() {
+    const W = 512, H = 256;
+    const [c, ctx] = canvas2d(W, H);
+    ctx.fillStyle = "#171009";
+    ctx.fillRect(0, 0, W, H);
+    const dyes = ["#4a2a2c", "#513322", "#24402f", "#3a4128", "#5d4a28", "#2b3a4e", "#233f41", "#3f2a40", "#332946", "#4c3a2b"];
+    for (let row = 0; row < 2; row++) {
+      const y0 = 12 + row * 128, bh = 96;
+      // plank above the row
+      ctx.fillStyle = "#241708";
+      ctx.fillRect(0, y0 + bh, W, 14);
+      ctx.fillStyle = "rgba(201,168,76,0.10)";
+      ctx.fillRect(0, y0 + bh, W, 2);
+      let x = 0;
+      while (x < W) {
+        const bw = 7 + Math.random() * 12;
+        const h = bh * (0.72 + Math.random() * 0.26);
+        const lean = Math.random() > 0.93 ? (Math.random() * 4 - 2) : 0;
+        ctx.save();
+        ctx.translate(x + bw / 2, y0 + bh);
+        ctx.rotate(lean * 0.03);
+        ctx.fillStyle = dyes[(Math.random() * dyes.length) | 0];
+        ctx.fillRect(-bw / 2, -h, bw, h);
+        ctx.fillStyle = "rgba(0,0,0,0.35)";
+        ctx.fillRect(bw / 2 - 2, -h, 2, h);
+        if (Math.random() > 0.4) {
+          ctx.fillStyle = "rgba(216,180,100,0.5)";
+          ctx.fillRect(-bw / 2 + 1, -h + 6, bw - 3, 1.5);
+          ctx.fillRect(-bw / 2 + 1, -12, bw - 3, 1.5);
+        }
+        ctx.restore();
+        x += bw + (Math.random() > 0.9 ? 6 : 0.5);
+      }
+    }
+    // sink the whole band into shadow so it reads as distance, not wallpaper
+    const dim = ctx.createLinearGradient(0, 0, 0, H);
+    dim.addColorStop(0, "rgba(6,4,2,0.72)");
+    dim.addColorStop(0.55, "rgba(6,4,2,0.45)");
+    dim.addColorStop(1, "rgba(6,4,2,0.62)");
+    ctx.fillStyle = dim;
+    ctx.fillRect(0, 0, W, H);
+    noise(ctx, W, H, 0.05);
+    const t = srgbTex(c);
+    t.wrapS = THREE.RepeatWrapping;
+    return t;
+  }
+
+  // moonlit gothic window: pointed arch, dark tracery, cold blue glass
+  function windowTexture() {
+    const W = 256, H = 512;
+    const [c, ctx] = canvas2d(W, H);
+    ctx.fillStyle = "#0b0805";
+    ctx.fillRect(0, 0, W, H);
+    const arch = (inset) => {
+      ctx.beginPath();
+      ctx.moveTo(inset, H - inset);
+      ctx.lineTo(inset, H * 0.36);
+      ctx.quadraticCurveTo(inset, inset, W / 2, inset);
+      ctx.quadraticCurveTo(W - inset, inset, W - inset, H * 0.36);
+      ctx.lineTo(W - inset, H - inset);
+      ctx.closePath();
+    };
+    // moonlight behind the glass
+    arch(26);
+    const sky = ctx.createRadialGradient(W * 0.62, H * 0.24, 10, W / 2, H * 0.45, H * 0.75);
+    sky.addColorStop(0, "#cfdcf2");
+    sky.addColorStop(0.14, "#7d97c4");
+    sky.addColorStop(0.5, "#3c5378");
+    sky.addColorStop(1, "#141e30");
+    ctx.save();
+    ctx.clip();
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, W, H);
+    // the moon itself, and a wisp of cloud
+    ctx.fillStyle = "rgba(235,242,252,0.95)";
+    ctx.beginPath(); ctx.arc(W * 0.62, H * 0.22, 22, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "rgba(20,30,48,0.55)";
+    ctx.beginPath(); ctx.ellipse(W * 0.5, H * 0.3, 70, 10, 0.1, 0, Math.PI * 2); ctx.fill();
+    // diamond panes
+    ctx.strokeStyle = "rgba(8,6,4,0.85)";
+    ctx.lineWidth = 2.5;
+    for (let i = -8; i < 16; i++) {
+      ctx.beginPath(); ctx.moveTo(i * 32, 0); ctx.lineTo(i * 32 + H, H); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(i * 32, 0); ctx.lineTo(i * 32 - H, H); ctx.stroke();
+    }
+    ctx.restore();
+    // stone tracery: center mullion + arch ribs
+    ctx.strokeStyle = "#241a10";
+    ctx.lineWidth = 9;
+    arch(26); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(W / 2, 26); ctx.lineTo(W / 2, H - 26); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(26, H * 0.42); ctx.lineTo(W - 26, H * 0.42); ctx.stroke();
+    ctx.strokeStyle = "#3a2c1a";
+    ctx.lineWidth = 3;
+    arch(18); ctx.stroke();
+    noise(ctx, W, H, 0.04);
+    return srgbTex(c);
+  }
+
+  // oxblood rug with a double gilt border and a quiet medallion
+  function rugTexture() {
+    const S = 512;
+    const [c, ctx] = canvas2d(S, S);
+    const cx = S / 2, cy = S / 2;
+    const base = ctx.createRadialGradient(cx, cy, 0, cx, cy, S / 2);
+    base.addColorStop(0, "#4a1f22");
+    base.addColorStop(0.7, "#3a181b");
+    base.addColorStop(1, "#2a1013");
+    ctx.fillStyle = base;
+    ctx.beginPath(); ctx.arc(cx, cy, S / 2 - 2, 0, Math.PI * 2); ctx.fill();
+    const ring = (r, w, col) => {
+      ctx.strokeStyle = col; ctx.lineWidth = w;
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+    };
+    ring(S / 2 - 14, 4, "rgba(201,168,76,0.75)");
+    ring(S / 2 - 26, 2, "rgba(201,168,76,0.45)");
+    ring(S * 0.18, 3, "rgba(201,168,76,0.5)");
+    ring(S * 0.13, 1.5, "rgba(201,168,76,0.35)");
+    // laurel dashes between the border rings
+    ctx.strokeStyle = "rgba(201,168,76,0.32)";
+    ctx.lineWidth = 2;
+    for (let a = 0; a < Math.PI * 2; a += Math.PI / 24) {
+      ctx.beginPath();
+      ctx.arc(cx, cy, S / 2 - 20, a, a + Math.PI / 60);
+      ctx.stroke();
+    }
+    // center rose medallion, eight petals
+    ctx.fillStyle = "rgba(201,168,76,0.28)";
+    for (let a = 0; a < Math.PI * 2; a += Math.PI / 4) {
+      ctx.beginPath();
+      ctx.ellipse(cx + Math.cos(a) * S * 0.055, cy + Math.sin(a) * S * 0.055, S * 0.05, S * 0.02, a, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.fillStyle = "rgba(224,185,92,0.5)";
+    ctx.beginPath(); ctx.arc(cx, cy, S * 0.018, 0, Math.PI * 2); ctx.fill();
+    noise(ctx, S, S, 0.06, 2200);
+    const t = srgbTex(c);
+    t.anisotropy = 4;
+    return t;
+  }
+
+  // a painted night sky for the dome: near-black with faint gilt stars
+  function domeTexture() {
+    const S = 512;
+    const [c, ctx] = canvas2d(S, S);
+    const g = ctx.createLinearGradient(0, 0, 0, S);
+    g.addColorStop(0, "#100c16");
+    g.addColorStop(1, "#0a0710");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, S, S);
+    for (let i = 0; i < 160; i++) {
+      const r = Math.random() < 0.9 ? 0.8 : 1.8;
+      ctx.fillStyle = `rgba(224,190,110,${0.15 + Math.random() * 0.45})`;
+      ctx.beginPath();
+      ctx.arc(Math.random() * S, Math.random() * S, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    const t = srgbTex(c);
+    t.wrapS = THREE.RepeatWrapping;
     return t;
   }
 
@@ -340,7 +514,7 @@ import * as THREE from "./vendor/three.module.min.js";
     ctx.translate(sx + sw / 2, 34);
     ctx.rotate(Math.PI / 2);
     ctx.fillStyle = "#efdba2";
-    ctx.font = "600 24px ui-monospace, Menlo, Consolas, monospace";
+    ctx.font = "600 24px Georgia, 'Times New Roman', serif";
     ctx.textBaseline = "middle";
     let spineTitle = title;
     while (ctx.measureText(spineTitle).width > S - 74 && spineTitle.length > 3) spineTitle = spineTitle.slice(0, -2).trim() + "…";
@@ -371,13 +545,13 @@ import * as THREE from "./vendor/three.module.min.js";
       ctx.strokeRect(cx0 + 15, 15, cw - 30, S - 30);
       ctx.fillStyle = "#efdba2";
       ctx.textAlign = "center";
-      ctx.font = "600 20px ui-monospace, Menlo, Consolas, monospace";
+      ctx.font = "600 20px Georgia, 'Times New Roman', serif";
       const lines = wrapLines(ctx, title, cw - 44, 4);
       lines.forEach((ln, i) => ctx.fillText(ln, cx0 + cw / 2, 72 + i * 26));
       ctx.fillStyle = "rgba(227,179,65,0.75)";
       ctx.fillRect(cx0 + cw / 2 - 22, 178, 44, 2);
       ctx.fillStyle = "#d9c894";
-      ctx.font = "15px ui-monospace, Menlo, Consolas, monospace";
+      ctx.font = "15px Georgia, 'Times New Roman', serif";
       wrapLines(ctx, authors, cw - 44, 2).forEach((ln, i) => ctx.fillText(ln, cx0 + cw / 2, 202 + i * 20));
       ctx.textAlign = "left";
     }
@@ -439,6 +613,7 @@ import * as THREE from "./vendor/three.module.min.js";
   let firstBuild = true;
   let shadowDirty = true;
   let radius = 3.2;            // current arc radius (updated per layout)
+  let arcHalf = Math.PI * 0.8; // half-angle actually covered by bookcases
   let dust = null;
   let dustSeed = null;
   let caseRoot = null;         // rebuilt on every layout
@@ -453,101 +628,416 @@ import * as THREE from "./vendor/three.module.min.js";
   const tmpV = new THREE.Vector3();
   const tmpV2 = new THREE.Vector3();
   const tmpQ = new THREE.Quaternion();
+  const tmpE = new THREE.Euler(0, 0, 0, "YXZ");
 
-  /* ---------- orbit controls (tiny, damped, touch-friendly) ---------- */
+  /* ---------- first-person player ---------- */
 
-  const ctrl = {
-    theta: 0, phi: 1.24, dist: 2.4,
-    tTheta: 0, tPhi: 1.24, tDist: 2.4,
-    target: new THREE.Vector3(0, 1.05, 0),
-    tTargetY: 1.05,
-    minDist: 0.7, maxDist: 8,
-    lastInput: 0,
-    autoSpin: 0,
+  const player = {
+    pos: new THREE.Vector3(0, 0, 2.2),  // feet, on the floor
+    vel: new THREE.Vector3(),
+    yaw: 0,            // 0 faces -z, toward the stacks
+    pitch: 0,
+    flyY: 0,           // extra height during the cinematic intro
+    bobT: 0,
   };
+  const keys = new Set();
+  let pointerLocked = false;
 
-  function applyCamera() {
-    ctrl.theta += (ctrl.tTheta - ctrl.theta) * 0.09;
-    ctrl.phi += (ctrl.tPhi - ctrl.phi) * 0.09;
-    ctrl.dist += (ctrl.tDist - ctrl.dist) * 0.09;
-    ctrl.target.y += (ctrl.tTargetY - ctrl.target.y) * 0.09;
-    const sp = Math.sin(ctrl.phi);
-    camera.position.set(
-      ctrl.target.x + ctrl.dist * sp * Math.sin(ctrl.theta),
-      ctrl.target.y + ctrl.dist * Math.cos(ctrl.phi),
-      ctrl.target.z + ctrl.dist * sp * Math.cos(ctrl.theta),
-    );
-    camera.lookAt(ctrl.target);
+  // move stick (touch): -1..1 on each axis, driven by the left thumb
+  const stick = { id: null, ox: 0, oy: 0, x: 0, y: 0, moved: 0, t0: 0 };
+  // look drag (touch): driven by the right thumb
+  const look = { id: null, x: 0, y: 0, moved: 0, t0: 0 };
+
+  // solid things you can't walk through: {x, z, r}
+  let colliders = [];
+  let bayEndColliders = [];
+
+  function collidePlayer(p) {
+    // circular push-outs: pedestal, candelabras, the flanks of the end bays
+    for (const c of [...colliders, ...bayEndColliders]) {
+      const dx = p.x - c.x, dz = p.z - c.z;
+      const d = Math.hypot(dx, dz);
+      if (d < c.r && d > 1e-4) {
+        p.x = c.x + (dx / d) * c.r;
+        p.z = c.z + (dz / d) * c.r;
+      }
+    }
+    // the shelf ring ahead, the rotunda wall through the opening behind
+    const r = Math.hypot(p.x, p.z);
+    if (r > 1e-4) {
+      const a = Math.atan2(p.x, -p.z);   // matches bay placement angles
+      const maxR = Math.abs(a) < arcHalf + 0.10 ? radius - 0.55 : roomWallR - 0.6;
+      if (r > maxR) { p.x *= maxR / r; p.z *= maxR / r; }
+    }
   }
 
-  let dragDist = 0;   // separates an orbit-drag release from a tap
+  const forwardOf = (yaw) => tmpV.set(-Math.sin(yaw), 0, -Math.cos(yaw));
+
+  function applyCamera(dt) {
+    // desired walk direction in the ground plane
+    let mx = 0, mz = 0;
+    if (keys.has("KeyW") || keys.has("ArrowUp")) mz += 1;
+    if (keys.has("KeyS") || keys.has("ArrowDown")) mz -= 1;
+    if (keys.has("KeyA") || keys.has("ArrowLeft")) mx -= 1;
+    if (keys.has("KeyD") || keys.has("ArrowRight")) mx += 1;
+    mx += stick.x; mz -= stick.y;
+    const mag = Math.hypot(mx, mz);
+    if (mag > 1) { mx /= mag; mz /= mag; }
+
+    const sprint = keys.has("ShiftLeft") || keys.has("ShiftRight");
+    const speed = sprint ? 3.1 : 1.6;
+
+    const sin = Math.sin(player.yaw), cos = Math.cos(player.yaw);
+    // forward = (-sin, -cos), right = (cos, -sin) in the xz plane
+    const wishX = (-sin * mz + cos * mx) * speed;
+    const wishZ = (-cos * mz - sin * mx) * speed;
+
+    const k = 1 - Math.exp(-dt * 9);           // smooth start/stop
+    player.vel.x += (wishX - player.vel.x) * k;
+    player.vel.z += (wishZ - player.vel.z) * k;
+
+    player.pos.x += player.vel.x * dt;
+    player.pos.z += player.vel.z * dt;
+    collidePlayer(player.pos);
+
+    // gentle head-bob scaled by how fast you're actually moving
+    const v = Math.hypot(player.vel.x, player.vel.z);
+    player.bobT += dt * (4.6 + v * 2.2);
+    const bobAmt = reducedMotion() ? 0 : Math.min(1, v / 1.6) * 0.026;
+    const bobY = Math.sin(player.bobT * 2) * bobAmt;
+    const bobR = Math.sin(player.bobT) * bobAmt * 0.4;
+
+    camera.position.set(player.pos.x, EYE + player.flyY + bobY, player.pos.z);
+    tmpE.set(player.pitch, player.yaw, bobR);
+    camera.quaternion.setFromEuler(tmpE);
+  }
+
+  /* ---------- input: pointer lock + keys on desktop, thumbs on touch ---------- */
+
+  function setHint(text) {
+    if (!hintEl) return;
+    hintEl.textContent = text;
+    hintEl.classList.remove("gone");
+    clearTimeout(setHint.timer);
+    setHint.timer = setTimeout(() => hintEl.classList.add("gone"), 6000);
+  }
 
   function bindControls(el) {
-    const pointers = new Map();
-    let pinchD = 0;
-
-    const touch = () => { ctrl.lastInput = performance.now(); dismissHint(); };
-
-    el.addEventListener("pointerdown", (e) => {
-      dragDist = 0;
-      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      if (pointers.size === 2) {
-        const [a, b] = [...pointers.values()];
-        pinchD = Math.hypot(a.x - b.x, a.y - b.y);
+    // --- desktop: click to enter, mouse to look, wasd to walk ---
+    el.addEventListener("click", (e) => {
+      if (coarsePointer()) return;
+      if (!pointerLocked) {
+        el.requestPointerLock?.();
+        return;
       }
-      el.setPointerCapture(e.pointerId);
-      touch();
+      const rec = pick(null);   // whatever the crosshair rests on
+      if (rec) present(rec);
+    });
+
+    document.addEventListener("pointerlockchange", () => {
+      pointerLocked = document.pointerLockElement === el;
+      worldEl.classList.toggle("walking", pointerLocked);
+      if (pointerLocked) setHint("wasd to walk · shift to hurry · click a book · esc to step out");
+      else {
+        setHover(null);
+        if (viewVisible()) setHint("click to step inside");
+      }
+    });
+
+    document.addEventListener("mousemove", (e) => {
+      if (!pointerLocked) return;
+      player.yaw -= e.movementX * 0.0023;
+      player.pitch = Math.max(-1.35, Math.min(1.35, player.pitch - e.movementY * 0.0021));
+    });
+
+    window.addEventListener("keydown", (e) => {
+      if (!running || !viewVisible()) return;
+      if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+      if (/^(KeyW|KeyA|KeyS|KeyD|ArrowUp|ArrowDown|ArrowLeft|ArrowRight|ShiftLeft|ShiftRight)$/.test(e.code)) {
+        keys.add(e.code);
+        if (e.code.startsWith("Arrow")) e.preventDefault();
+      }
+    });
+    window.addEventListener("keyup", (e) => keys.delete(e.code));
+    window.addEventListener("blur", () => keys.clear());
+
+    // --- touch: left thumb walks, right thumb looks, tap to reach ---
+    el.addEventListener("pointerdown", (e) => {
+      if (e.pointerType !== "touch") return;
+      const r = el.getBoundingClientRect();
+      const x = e.clientX - r.left, y = e.clientY - r.top;
+      if (x < r.width / 2 && stick.id === null) {
+        stick.id = e.pointerId;
+        stick.ox = e.clientX; stick.oy = e.clientY;
+        stick.x = 0; stick.y = 0;
+        stick.moved = 0; stick.t0 = performance.now();
+        if (stickEl) {
+          stickEl.style.left = `${x}px`;
+          stickEl.style.top = `${y}px`;
+          stickEl.classList.add("live");
+        }
+      } else if (look.id === null) {
+        look.id = e.pointerId;
+        look.x = e.clientX; look.y = e.clientY;
+        look.moved = 0; look.t0 = performance.now();
+      }
+      try { el.setPointerCapture(e.pointerId); } catch { /* synthetic events have no capture */ }
+      hintEl?.classList.add("gone");
     });
 
     el.addEventListener("pointermove", (e) => {
-      if (!pointers.has(e.pointerId)) { queueHover(e); return; }
-      const p = pointers.get(e.pointerId);
-      const dx = e.clientX - p.x, dy = e.clientY - p.y;
-      dragDist += Math.abs(dx) + Math.abs(dy);
-      p.x = e.clientX; p.y = e.clientY;
-      if (pointers.size === 1) {
-        ctrl.tTheta -= dx * 0.005;
-        ctrl.tPhi = Math.max(0.35, Math.min(1.53, ctrl.tPhi - dy * 0.004));
-        touch();
-      } else if (pointers.size === 2) {
-        const [a, b] = [...pointers.values()];
-        const d = Math.hypot(a.x - b.x, a.y - b.y);
-        if (pinchD) {
-          ctrl.tDist = Math.max(ctrl.minDist, Math.min(ctrl.maxDist, ctrl.tDist * (pinchD / d)));
-          ctrl.tTargetY = Math.max(0.5, Math.min(2.4, ctrl.tTargetY + dy * 0.002));
-        }
-        pinchD = d;
-        touch();
+      if (e.pointerType !== "touch") return;
+      if (e.pointerId === stick.id) {
+        const R = 46;
+        let dx = e.clientX - stick.ox, dy = e.clientY - stick.oy;
+        const d = Math.hypot(dx, dy);
+        stick.moved = Math.max(stick.moved, d);
+        if (d > R) { dx *= R / d; dy *= R / d; }
+        stick.x = dx / R; stick.y = dy / R;
+        if (stickNub) stickNub.style.transform = `translate(${dx}px, ${dy}px)`;
+      } else if (e.pointerId === look.id) {
+        const dx = e.clientX - look.x, dy = e.clientY - look.y;
+        look.moved += Math.abs(dx) + Math.abs(dy);
+        look.x = e.clientX; look.y = e.clientY;
+        player.yaw -= dx * 0.005;
+        player.pitch = Math.max(-1.35, Math.min(1.35, player.pitch - dy * 0.004));
       }
     });
 
-    const up = (e) => { pointers.delete(e.pointerId); pinchD = 0; };
-    el.addEventListener("pointerup", up);
-    el.addEventListener("pointercancel", up);
+    const touchUp = (e) => {
+      if (e.pointerId === stick.id) {
+        const quick = performance.now() - stick.t0 < 350 && stick.moved < 12;
+        stick.id = null; stick.x = 0; stick.y = 0;
+        stickEl?.classList.remove("live");
+        if (stickNub) stickNub.style.transform = "";
+        if (quick) {
+          // a motionless dab on the left half is a tap, not a walk
+          const rec = pick(e);
+          if (rec) present(rec);
+        }
+      } else if (e.pointerId === look.id) {
+        const quick = performance.now() - look.t0 < 350 && look.moved < 12;
+        look.id = null;
+        if (quick) {
+          const rec = pick(e);
+          if (rec) present(rec);
+        }
+      }
+    };
+    el.addEventListener("pointerup", touchUp);
+    el.addEventListener("pointercancel", touchUp);
 
-    el.addEventListener("wheel", (e) => {
-      e.preventDefault();
-      ctrl.tDist = Math.max(ctrl.minDist, Math.min(ctrl.maxDist, ctrl.tDist * (1 + e.deltaY * 0.0012)));
-      touch();
-    }, { passive: false });
-
-    el.addEventListener("dblclick", () => {
-      ctrl.tDist = ctrl.tDist > 2 ? 1.1 : radius * 0.78;
-      touch();
-    });
-  }
-
-  function dismissHint() {
-    if (hintEl && !hintEl.classList.contains("gone")) hintEl.classList.add("gone");
+    el.addEventListener("wheel", (e) => e.preventDefault(), { passive: false });
   }
 
   /* ---------- room ---------- */
 
   let roomRoot = null;
   let roomWallR = 0;
+  let flames = [];        // {obj, seed, base} — candle sprites that flicker
+  let chandLight = null;
+  let roseGroup = null;
+  let roseSpin = null;
+  let sparkles = null;
+  let sparkleSeed = null;
 
-  // the shell (floor, wall, dome, skylight) is sized to the bookcase ring
-  // and rebuilt only when a regroup meaningfully changes the arc radius
+  const goldMat = () => new THREE.MeshStandardMaterial({ color: 0x8a6a2c, roughness: 0.35, metalness: 0.85 });
+
+  function candleFlame(scale = 1) {
+    const m = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: assets.dustTex, color: 0xffbe6a, transparent: true, opacity: 0.95,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    }));
+    m.scale.setScalar(0.075 * scale);
+    flames.push({ obj: m, seed: Math.random() * Math.PI * 2, base: 0.075 * scale });
+    return m;
+  }
+
+  // a floor-standing candelabra — the Lumière nod by the windows
+  function buildCandelabra() {
+    const g = new THREE.Group();
+    const gold = goldMat();
+    const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.05, 1.25, 8), gold);
+    stem.position.y = 0.625;
+    g.add(stem);
+    const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.17, 0.05, 12), gold);
+    foot.position.y = 0.025;
+    g.add(foot);
+    const candleMat = new THREE.MeshStandardMaterial({ color: 0xe8dcbe, roughness: 0.6 });
+    for (let i = -1; i <= 1; i++) {
+      const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.3, 6), gold);
+      arm.rotation.z = Math.PI / 2;
+      arm.position.set(i * 0.14, 1.28, 0);
+      if (i !== 0) g.add(arm);
+      const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.02, 0.03, 8), gold);
+      cup.position.set(i * 0.28, 1.3 + (i === 0 ? 0.08 : 0), 0);
+      g.add(cup);
+      const candle = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.14, 8), candleMat);
+      candle.position.set(i * 0.28, 1.39 + (i === 0 ? 0.08 : 0), 0);
+      g.add(candle);
+      const fl = candleFlame(0.9);
+      fl.position.set(i * 0.28, 1.5 + (i === 0 ? 0.08 : 0), 0);
+      g.add(fl);
+    }
+    return g;
+  }
+
+  // the candle chandelier over the middle of the hall
+  function buildChandelier(y, oculusY) {
+    const g = new THREE.Group();
+    const gold = goldMat();
+    const chain = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, oculusY - y, 6), gold);
+    chain.position.y = (oculusY - y) / 2;
+    g.add(chain);
+    const hub = new THREE.Mesh(new THREE.SphereGeometry(0.09, 12, 8), gold);
+    g.add(hub);
+    const candleMat = new THREE.MeshStandardMaterial({ color: 0xe8dcbe, roughness: 0.6 });
+    const rings = [
+      { r: 0.85, n: 12, dy: 0 },
+      { r: 0.45, n: 6, dy: 0.22 },
+    ];
+    for (const ring of rings) {
+      const torus = new THREE.Mesh(new THREE.TorusGeometry(ring.r, 0.02, 8, 40), gold);
+      torus.rotation.x = Math.PI / 2;
+      torus.position.y = ring.dy;
+      g.add(torus);
+      for (let i = 0; i < ring.n; i++) {
+        const a = (i / ring.n) * Math.PI * 2;
+        const px = Math.cos(a) * ring.r, pz = Math.sin(a) * ring.r;
+        const candle = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.15, 6), candleMat);
+        candle.position.set(px, ring.dy + 0.095, pz);
+        g.add(candle);
+        const fl = candleFlame();
+        fl.position.set(px, ring.dy + 0.215, pz);
+        g.add(fl);
+      }
+      // spokes to the hub
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * Math.PI * 2 + 0.4;
+        const spoke = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, ring.r, 5), gold);
+        spoke.rotation.z = Math.PI / 2;
+        spoke.rotation.y = -a;
+        spoke.position.set(Math.cos(a) * ring.r / 2, ring.dy, Math.sin(a) * ring.r / 2);
+        g.add(spoke);
+      }
+    }
+    chandLight = new THREE.PointLight(0xffb168, 16, 15, 1.7);
+    chandLight.position.y = 0.1;
+    g.add(chandLight);
+    g.position.y = y;
+    return g;
+  }
+
+  // the enchanted rose under glass, mid-hall on a marble pedestal
+  function buildRose() {
+    const g = new THREE.Group();
+
+    const marble = new THREE.MeshStandardMaterial({ color: 0x35303c, roughness: 0.35, metalness: 0.1 });
+    const column = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.2, 0.92, 16), marble);
+    column.position.y = 0.46;
+    column.castShadow = true;
+    g.add(column);
+    const plate = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.26, 0.035, 20), goldMat());
+    plate.position.y = 0.94;
+    g.add(plate);
+
+    const rose = new THREE.Group();
+    const stem = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.006, 0.008, 0.26, 5),
+      new THREE.MeshStandardMaterial({ color: 0x2c4428, roughness: 0.8 }),
+    );
+    stem.position.y = 0.13;
+    rose.add(stem);
+    const leaf = new THREE.Mesh(
+      new THREE.SphereGeometry(0.03, 6, 4),
+      new THREE.MeshStandardMaterial({ color: 0x2c4428, roughness: 0.8 }),
+    );
+    leaf.scale.set(1, 0.25, 0.5);
+    leaf.position.set(0.03, 0.12, 0);
+    rose.add(leaf);
+    const bloomMat = new THREE.MeshStandardMaterial({
+      color: 0x8e1626, roughness: 0.5, emissive: 0x400d16, emissiveIntensity: 0.55,
+    });
+    const bloom = new THREE.Mesh(new THREE.IcosahedronGeometry(0.036, 1), bloomMat);
+    bloom.scale.set(1, 1.3, 1);
+    bloom.position.y = 0.285;
+    rose.add(bloom);
+    // outer petals: flattened spheres skirting the bloom
+    for (let i = 0; i < 5; i++) {
+      const a = (i / 5) * Math.PI * 2;
+      const petal = new THREE.Mesh(new THREE.SphereGeometry(0.02, 6, 4), bloomMat);
+      petal.scale.set(1, 0.45, 0.7);
+      petal.position.set(Math.cos(a) * 0.026, 0.262, Math.sin(a) * 0.026);
+      petal.rotation.y = -a;
+      petal.rotation.z = 0.5;
+      rose.add(petal);
+    }
+    // the rose floats — an enchantment, after all
+    rose.position.y = 1.02;
+    g.add(rose);
+    roseSpin = rose;
+
+    // fallen petals on the plate
+    const petalMat = new THREE.MeshStandardMaterial({ color: 0x7c1626, roughness: 0.6, side: THREE.DoubleSide });
+    for (let i = 0; i < 3; i++) {
+      const p = new THREE.Mesh(new THREE.CircleGeometry(0.018, 6), petalMat);
+      p.rotation.x = -Math.PI / 2 + 0.15 * (i - 1);
+      p.rotation.z = i * 2.1;
+      p.position.set(Math.cos(i * 2.4) * 0.12, 0.962, Math.sin(i * 2.4) * 0.12);
+      g.add(p);
+    }
+
+    // glass cloche: a faint shell plus an additive rim so it catches the candles
+    const dome = new THREE.Mesh(
+      new THREE.SphereGeometry(0.22, 20, 14, 0, Math.PI * 2, 0, Math.PI / 2),
+      new THREE.MeshPhongMaterial({
+        color: 0xbfd0e0, transparent: true, opacity: 0.13, shininess: 90, specular: 0x99aabb,
+      }),
+    );
+    dome.scale.y = 1.9;
+    dome.position.y = 0.958;
+    g.add(dome);
+    const rim = new THREE.Mesh(
+      new THREE.SphereGeometry(0.222, 20, 14, 0, Math.PI * 2, 0, Math.PI / 2),
+      new THREE.MeshBasicMaterial({
+        color: 0x8fb0d8, transparent: true, opacity: 0.05,
+        blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.BackSide,
+      }),
+    );
+    rim.scale.y = 1.9;
+    rim.position.y = 0.958;
+    g.add(rim);
+
+    // rose-light spills out of the glass
+    const roseLight = new THREE.PointLight(0xff5f78, 1.4, 3.5, 1.9);
+    roseLight.position.y = 1.35;
+    g.add(roseLight);
+
+    // enchanted motes rising inside the cloche
+    const N = 36;
+    const pos = new Float32Array(N * 3);
+    sparkleSeed = new Float32Array(N);
+    for (let i = 0; i < N; i++) {
+      const r = Math.random() * 0.16, a = Math.random() * Math.PI * 2;
+      pos[i * 3] = Math.cos(a) * r;
+      pos[i * 3 + 1] = 0.98 + Math.random() * 0.36;
+      pos[i * 3 + 2] = Math.sin(a) * r;
+      sparkleSeed[i] = Math.random() * Math.PI * 2;
+    }
+    const sg = new THREE.BufferGeometry();
+    sg.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    sparkles = new THREE.Points(sg, new THREE.PointsMaterial({
+      map: assets.dustTex, color: 0xff9eae, size: 0.014, transparent: true, opacity: 0.85,
+      blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true,
+    }));
+    g.add(sparkles);
+
+    return g;
+  }
+
+  // the shell (floor, walls, upper stacks, dome, windows, chandelier, rose)
+  // is sized to the bookcase ring and rebuilt only when a regroup
+  // meaningfully changes the arc radius
   function buildShell(wallR) {
     if (Math.abs(wallR - roomWallR) < 0.6 && roomRoot) return;
     roomWallR = wallR;
@@ -555,8 +1045,11 @@ import * as THREE from "./vendor/three.module.min.js";
       scene.remove(roomRoot);
       roomRoot.traverse((o) => { if (o.isMesh) o.geometry.dispose(); });
     }
+    flames = [];
     roomRoot = new THREE.Group();
-    const ceilH = Math.max(4.6, wallR * 1.05);
+    colliders = [{ x: 0, z: 0, r: 0.75 }];   // the rose pedestal
+    const ceilH = Math.max(5.4, wallR * 1.1);
+    const galleryY = Math.min(3.2, ceilH * 0.58);
 
     const floor = new THREE.Mesh(
       new THREE.CircleGeometry(wallR + 0.5, 64),
@@ -566,46 +1059,133 @@ import * as THREE from "./vendor/three.module.min.js";
     floor.receiveShadow = true;
     roomRoot.add(floor);
 
-    const wall = new THREE.Mesh(
-      new THREE.CylinderGeometry(wallR, wallR, ceilH, 48, 1, true),
-      new THREE.MeshStandardMaterial({ color: 0x18202e, roughness: 0.95, side: THREE.BackSide }),
+    // the great rug under the rose
+    const rug = new THREE.Mesh(
+      new THREE.CircleGeometry(1.9, 48),
+      new THREE.MeshStandardMaterial({ map: assets.rugTex, roughness: 0.92 }),
     );
-    wall.position.y = ceilH / 2;
+    rug.rotation.x = -Math.PI / 2;
+    rug.position.y = 0.006;
+    rug.receiveShadow = true;
+    roomRoot.add(rug);
+
+    // walls: oxblood plaster over a walnut wainscot, gilt rails between
+    const wainH = 1.15;
+    const wain = new THREE.Mesh(
+      new THREE.CylinderGeometry(wallR, wallR, wainH, 48, 1, true),
+      new THREE.MeshStandardMaterial({ map: assets.wood, roughness: 0.8, side: THREE.BackSide }),
+    );
+    wain.position.y = wainH / 2;
+    roomRoot.add(wain);
+
+    const wall = new THREE.Mesh(
+      new THREE.CylinderGeometry(wallR, wallR, ceilH - wainH, 48, 1, true),
+      new THREE.MeshStandardMaterial({ color: 0x2a1a15, roughness: 0.95, side: THREE.BackSide }),
+    );
+    wall.position.y = wainH + (ceilH - wainH) / 2;
     roomRoot.add(wall);
 
+    // the illusion of endless upper stacks wrapping the rotunda
+    const stacksTex = assets.stacksTex.clone();
+    stacksTex.repeat.set(Math.max(6, Math.round(wallR * 1.6)), 1);
+    stacksTex.needsUpdate = true;
+    const stackH = Math.max(1.8, ceilH - 2.3);
+    const stacks = new THREE.Mesh(
+      new THREE.CylinderGeometry(wallR - 0.04, wallR - 0.04, stackH, 48, 1, true),
+      new THREE.MeshStandardMaterial({ map: stacksTex, roughness: 0.95, side: THREE.BackSide }),
+    );
+    stacks.position.y = 1.9 + stackH / 2;
+    roomRoot.add(stacks);
+
+    // gallery ledge + brass railing girdling the upper stacks
+    const ledge = new THREE.Mesh(
+      new THREE.CylinderGeometry(wallR - 0.02, wallR - 0.02, 0.09, 48, 1, true),
+      new THREE.MeshStandardMaterial({ map: assets.wood, roughness: 0.8, side: THREE.DoubleSide }),
+    );
+    ledge.position.y = galleryY;
+    roomRoot.add(ledge);
+    const rail = new THREE.Mesh(new THREE.TorusGeometry(wallR - 0.12, 0.018, 6, 64), goldMat());
+    rail.rotation.x = Math.PI / 2;
+    rail.position.y = galleryY + 0.32;
+    roomRoot.add(rail);
+    const railLow = new THREE.Mesh(new THREE.TorusGeometry(wallR - 0.12, 0.01, 5, 64), goldMat());
+    railLow.rotation.x = Math.PI / 2;
+    railLow.position.y = galleryY + 0.14;
+    roomRoot.add(railLow);
+    // wainscot cap rail
+    const cap = new THREE.Mesh(new THREE.TorusGeometry(wallR - 0.02, 0.014, 5, 64), goldMat());
+    cap.rotation.x = Math.PI / 2;
+    cap.position.y = wainH;
+    roomRoot.add(cap);
+
+    // starred dome with the oculus above
     const dome = new THREE.Mesh(
       new THREE.SphereGeometry(wallR, 40, 18, 0, Math.PI * 2, 0, Math.PI / 2),
-      new THREE.MeshStandardMaterial({ color: 0x11161f, roughness: 1, side: THREE.BackSide }),
+      new THREE.MeshStandardMaterial({ map: assets.domeTex, roughness: 1, side: THREE.BackSide }),
     );
     dome.position.y = ceilH;
     dome.scale.y = 0.55;
     roomRoot.add(dome);
 
-    // oculus ring + the shaft of light through it
     const oculusY = ceilH + wallR * 0.5;
     const ring = new THREE.Mesh(
       new THREE.TorusGeometry(0.95, 0.08, 12, 48),
-      new THREE.MeshBasicMaterial({ color: 0xffe6bb }),
+      new THREE.MeshBasicMaterial({ color: 0xdfe8f8 }),
     );
     ring.rotation.x = Math.PI / 2;
     ring.position.y = oculusY;
     roomRoot.add(ring);
 
+    // moonlight shaft through the oculus
     const shaft = (r0, r1, op) => {
       const m = new THREE.Mesh(
         new THREE.CylinderGeometry(r0, r1, oculusY, 32, 1, true),
         new THREE.MeshBasicMaterial({
-          color: 0xffdda6, transparent: true, opacity: op,
+          color: 0xcdd9ee, transparent: true, opacity: op,
           blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
         }),
       );
       m.position.y = oculusY / 2;
       roomRoot.add(m);
     };
-    shaft(0.9, 1.55, 0.022);
-    shaft(0.55, 1.0, 0.03);
+    shaft(0.9, 1.55, 0.02);
+    shaft(0.55, 1.0, 0.028);
 
-    // wall sconces: emissive amber slivers with a soft halo, purely decorative
+    // moonlit gothic windows in the opening behind you
+    const winGeo = new THREE.PlaneGeometry(1.15, 2.3);
+    const winMat = new THREE.MeshBasicMaterial({ map: assets.windowTex });
+    for (const off of [-0.42, 0, 0.42]) {
+      const a = Math.PI + off;
+      const px = Math.sin(a) * (wallR - 0.08), pz = -Math.cos(a) * (wallR - 0.08);
+      const w = new THREE.Mesh(winGeo, winMat);
+      w.position.set(px, 1.85, pz);
+      w.lookAt(0, 1.85, 0);
+      roomRoot.add(w);
+      // cold spill on the floor under each window
+      const spill = new THREE.Mesh(
+        new THREE.PlaneGeometry(1.5, 2.4),
+        new THREE.MeshBasicMaterial({
+          map: assets.dustTex, color: 0x4d648c, transparent: true, opacity: 0.14,
+          blending: THREE.AdditiveBlending, depthWrite: false,
+        }),
+      );
+      spill.rotation.x = -Math.PI / 2;
+      spill.position.set(px * 0.82, 0.012, pz * 0.82);
+      roomRoot.add(spill);
+    }
+
+    // floor candelabras flanking the windows
+    for (const off of [-0.24, 0.24]) {
+      const a = Math.PI + off;
+      const px = Math.sin(a) * (wallR - 1.0), pz = -Math.cos(a) * (wallR - 1.0);
+      const cd = buildCandelabra();
+      cd.position.set(px, 0, pz);
+      cd.rotation.y = -a;
+      roomRoot.add(cd);
+      colliders.push({ x: px, z: pz, r: 0.42 });
+    }
+
+    // wall sconces: candle slivers with a soft halo, purely decorative
     const sconceMat = new THREE.MeshBasicMaterial({ color: 0xffd9a0 });
     const haloMat = new THREE.MeshBasicMaterial({
       map: assets.dustTex, color: 0xff9d55, transparent: true, opacity: 0.5,
@@ -625,6 +1205,10 @@ import * as THREE from "./vendor/three.module.min.js";
       roomRoot.add(halo);
     }
 
+    roomRoot.add(buildChandelier(Math.min(3.5, ceilH - 1.6), oculusY));
+    roseGroup = buildRose();
+    roomRoot.add(roseGroup);
+
     scene.add(roomRoot);
     shadowDirty = true;
   }
@@ -632,28 +1216,26 @@ import * as THREE from "./vendor/three.module.min.js";
   function buildRoom() {
     const wood = woodTexture();
     const floorTex = floorTexture();
+    const dustTex = dustTexture();
 
-    // lights
-    scene.add(new THREE.HemisphereLight(0xaab7cc, 0x2a1c10, 0.85));
+    // lights: cool moonlight from above, warm candlelight in the room
+    scene.add(new THREE.HemisphereLight(0x8091ad, 0x2a1c10, 0.7));
 
-    const sun = new THREE.DirectionalLight(0xffe2b0, 2.6);
-    sun.position.set(1.2, 7.2, 0.6);
-    sun.castShadow = true;
-    sun.shadow.mapSize.set(1024, 1024);
-    sun.shadow.camera.left = sun.shadow.camera.bottom = -8;
-    sun.shadow.camera.right = sun.shadow.camera.top = 8;
-    sun.shadow.camera.far = 12;
-    sun.shadow.bias = -0.0005;
-    scene.add(sun);
+    const moon = new THREE.DirectionalLight(0xcfdaf2, 1.7);
+    moon.position.set(1.2, 7.2, 0.6);
+    moon.castShadow = true;
+    moon.shadow.mapSize.set(1024, 1024);
+    moon.shadow.camera.left = moon.shadow.camera.bottom = -8;
+    moon.shadow.camera.right = moon.shadow.camera.top = 8;
+    moon.shadow.camera.far = 12;
+    moon.shadow.bias = -0.0005;
+    scene.add(moon);
 
-    const warmA = new THREE.PointLight(0xffb46b, 8, 12, 1.8);
-    warmA.position.set(2.4, 2.7, -2.0);
-    scene.add(warmA);
-    const warmB = new THREE.PointLight(0xff9d55, 6, 12, 1.8);
-    warmB.position.set(-2.6, 2.4, 2.2);
-    scene.add(warmB);
+    const ember = new THREE.PointLight(0xff9d55, 5, 11, 1.9);
+    ember.position.set(-2.6, 2.3, 2.2);
+    scene.add(ember);
 
-    // drifting dust in the shaft
+    // drifting dust in the moonlight
     const N = 420;
     const pos = new Float32Array(N * 3);
     dustSeed = new Float32Array(N);
@@ -667,26 +1249,60 @@ import * as THREE from "./vendor/three.module.min.js";
     }
     const dustGeo = new THREE.BufferGeometry();
     dustGeo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
-    const dustTex = dustTexture();
     dust = new THREE.Points(dustGeo, new THREE.PointsMaterial({
       map: dustTex, size: 0.022, transparent: true, opacity: 0.5,
       blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true,
     }));
     scene.add(dust);
 
-    return { wood, floorTex, dustTex };
+    return {
+      wood, floorTex, dustTex,
+      rugTex: rugTexture(),
+      stacksTex: stacksTexture(),
+      windowTex: windowTexture(),
+      domeTex: domeTexture(),
+    };
   }
 
-  function tickDust(t) {
-    if (!dust) return;
-    const pos = dust.geometry.attributes.position;
-    for (let i = 0; i < pos.count; i++) {
-      let y = pos.getY(i) - 0.0011;
-      if (y < 0.04) y = 6.8;
-      pos.setY(i, y);
-      pos.setX(i, pos.getX(i) + Math.sin(t * 0.0004 + dustSeed[i]) * 0.0006);
+  function tickAmbience(t, dt) {
+    // dust drifting down the moonlight
+    if (dust) {
+      const pos = dust.geometry.attributes.position;
+      for (let i = 0; i < pos.count; i++) {
+        let y = pos.getY(i) - 0.0011;
+        if (y < 0.04) y = 6.8;
+        pos.setY(i, y);
+        pos.setX(i, pos.getX(i) + Math.sin(t * 0.0004 + dustSeed[i]) * 0.0006);
+      }
+      pos.needsUpdate = true;
     }
-    pos.needsUpdate = true;
+    // candle flicker
+    const ts = t * 0.001;
+    for (const f of flames) {
+      const n = Math.sin(ts * 9 + f.seed) * 0.5 + Math.sin(ts * 23 + f.seed * 2) * 0.5;
+      f.obj.scale.setScalar(f.base * (1 + n * 0.16));
+      f.obj.material.opacity = 0.8 + n * 0.15;
+    }
+    if (chandLight) chandLight.intensity = 16 * (1 + Math.sin(ts * 11) * 0.035 + Math.sin(ts * 27) * 0.025);
+    // the rose turns slowly under its glass
+    if (roseSpin && !reducedMotion()) {
+      roseSpin.rotation.y += dt * 0.25;
+      roseSpin.position.y = 1.02 + Math.sin(ts * 0.9) * 0.012;
+    }
+    // enchanted motes spiralling up inside the cloche
+    if (sparkles) {
+      const pos = sparkles.geometry.attributes.position;
+      for (let i = 0; i < pos.count; i++) {
+        let y = pos.getY(i) + 0.0009;
+        if (y > 1.36) y = 0.98;
+        pos.setY(i, y);
+        const a = ts * 0.5 + sparkleSeed[i];
+        const r = 0.05 + (sparkleSeed[i] % 1) * 0.12;
+        pos.setX(i, Math.cos(a + i) * r);
+        pos.setZ(i, Math.sin(a + i) * r);
+      }
+      pos.needsUpdate = true;
+    }
   }
 
   /* ---------- layout: groups -> shelf rows -> bays on an arc ---------- */
@@ -752,17 +1368,19 @@ import * as THREE from "./vendor/three.module.min.js";
       for (const bi of bayOfRow) rowInBayOf.push(counters[bi]++);
     }
     const step = BAY.w + BAY.gap;
-    const maxArc = Math.PI * 1.62;                       // leave an opening behind the camera
+    const maxArc = Math.PI * 1.62;                       // leave an opening for the windows
     radius = Math.max(2.6, (step * bayCount) / maxArc);
     const angStep = step / radius;
+    arcHalf = (bayCount * angStep) / 2;
     const bays = [];
     for (let i = 0; i < bayCount; i++) {
-      const a = (i - (bayCount - 1) / 2) * angStep;      // 0 = straight ahead (-z from camera start)
+      const a = (i - (bayCount - 1) / 2) * angStep;      // 0 = straight ahead (-z from the door)
       const pos = new THREE.Vector3(Math.sin(a) * radius, 0, -Math.cos(a) * radius);
       // face the centre of the rotunda: local +z (the bay front) -> origin
       const quat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -a);
       bays.push({ pos, quat, a });
     }
+    bayEndColliders = [bays[0], bays[bays.length - 1]].map((b) => ({ x: b.pos.x, z: b.pos.z, r: 0.95 }));
 
     const placements = new Map();   // book id -> {pos, quat, out}
     const plaques = [];             // {bay, rowInBay, text, n}
@@ -818,13 +1436,14 @@ import * as THREE from "./vendor/three.module.min.js";
     caseRoot = new THREE.Group();
 
     const woodMat = new THREE.MeshStandardMaterial({ map: wood, roughness: 0.72, metalness: 0.05 });
-    const woodDark = new THREE.MeshStandardMaterial({ color: 0x241812, roughness: 0.9 });
+    const woodDark = new THREE.MeshStandardMaterial({ color: 0x1e1209, roughness: 0.9 });
     const glowMat = new THREE.MeshBasicMaterial({
       color: 0xffc98a, transparent: true, opacity: 0.85,
       blending: THREE.AdditiveBlending, depthWrite: false,
     });
+    const gold = goldMat();
 
-    for (const bay of layout.bays) {
+    layout.bays.forEach((bay, bi) => {
       const g = new THREE.Group();
       g.position.copy(bay.pos);
       g.quaternion.copy(bay.quat);
@@ -845,7 +1464,18 @@ import * as THREE from "./vendor/three.module.min.js";
       box(BAY.w + 0.06, BAY.baseH, BAY.depth + 0.05, 0, BAY.baseH / 2, 0.012);
       box(BAY.w + 0.08, BAY.crownH, BAY.depth + 0.07, 0, BAY.h - BAY.crownH / 2, 0.02);
 
-      // shelf planks + a warm light strip on the underside of each
+      // a carved pilaster with a gilt capital between neighbouring bays
+      if (bi > 0) {
+        const col = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.065, BAY.h + 0.34, 10), woodMat);
+        col.position.set(-(BAY.w + BAY.gap) / 2, (BAY.h + 0.34) / 2, BAY.depth / 2 - 0.02);
+        col.castShadow = true;
+        g.add(col);
+        const capTop = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.055, 0.05, 10), gold);
+        capTop.position.set(-(BAY.w + BAY.gap) / 2, BAY.h + 0.32, BAY.depth / 2 - 0.02);
+        g.add(capTop);
+      }
+
+      // shelf planks + a warm candle strip on the underside of each
       for (let r = 0; r <= BAY.rows; r++) {
         const y = BAY.baseH + r * BAY.rowH;
         if (r < BAY.rows) box(BAY.w - BAY.side, BAY.shelfT, BAY.depth - 0.02, 0, y + BAY.shelfT / 2, 0);
@@ -857,6 +1487,31 @@ import * as THREE from "./vendor/three.module.min.js";
         }
       }
       caseRoot.add(g);
+    });
+
+    // a wooden ladder leaning against the second bay, as libraries demand
+    if (layout.bays.length > 1) {
+      const bay = layout.bays[1];
+      const ladder = new THREE.Group();
+      const railGeo = new THREE.BoxGeometry(0.035, 1.95, 0.03);
+      for (const sx of [-0.17, 0.17]) {
+        const rail = new THREE.Mesh(railGeo, woodDark);
+        rail.position.set(sx, 0.975, 0);
+        rail.castShadow = true;
+        ladder.add(rail);
+      }
+      for (let i = 0; i < 6; i++) {
+        const rung = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.34, 6), woodDark);
+        rung.rotation.z = Math.PI / 2;
+        rung.position.set(0, 0.28 + i * 0.28, 0);
+        ladder.add(rung);
+      }
+      ladder.rotation.x = -0.2;      // leaning back onto the case
+      const local = new THREE.Vector3(0.45, 0, BAY.depth / 2 + 0.36);
+      ladder.position.copy(local.applyQuaternion(bay.quat).add(bay.pos));
+      ladder.quaternion.copy(bay.quat);
+      ladder.rotateX(-0.2);
+      caseRoot.add(ladder);
     }
 
     // brass plaques on the shelf edge where each group begins
@@ -945,7 +1600,7 @@ import * as THREE from "./vendor/three.module.min.js";
     gsap.killTweensOf(rec.mesh.position);   // a hover pull-out must not fight the flight
 
     // control point: lifted and pulled toward the center of the room, so
-    // flights sweep through the light shaft instead of clipping the cases
+    // flights sweep over the rose instead of clipping the cases
     const mid = p0.clone().lerp(p1, 0.5);
     mid.x *= 0.45; mid.z *= 0.45;
     mid.y += 0.5 + Math.min(1.6, dist * 0.32);
@@ -1004,8 +1659,7 @@ import * as THREE from "./vendor/three.module.min.js";
     const layout = computeLayout(groups);
     buildShell(radius + 2.4);
     buildCases(layout, assets.wood);
-    ctrl.maxDist = radius + 1.6;
-    ctrl.tDist = Math.min(ctrl.tDist, ctrl.maxDist);   // a shrinking ring reels the camera back in
+    collidePlayer(player.pos);   // a shrinking ring nudges the reader back in
 
     const seen = new Set();
     const anim = animate && !reducedMotion();
@@ -1036,8 +1690,8 @@ import * as THREE from "./vendor/three.module.min.js";
 
     const n = books.length, s = layout.groupsCount;
     countEl.textContent = mode === "author"
-      ? `${n} book${n === 1 ? "" : "s"} · a–z by author · drag to wander`
-      : `${n} book${n === 1 ? "" : "s"} · ${s} shel${s === 1 ? "f" : "ves"} · drag to wander`;
+      ? `${n} book${n === 1 ? "" : "s"} · a–z by author · walk the stacks`
+      : `${n} book${n === 1 ? "" : "s"} · ${s} shel${s === 1 ? "f" : "ves"} · walk the stacks`;
 
     if (firstBuild) {
       firstBuild = false;
@@ -1049,35 +1703,36 @@ import * as THREE from "./vendor/three.module.min.js";
   /* ---------- cinematic intro ---------- */
 
   function playIntro() {
-    ctrl.tDist = Math.min(ctrl.maxDist, Math.max(2.2, radius * 0.72));
-    ctrl.tPhi = 1.24;
-    ctrl.tTheta = 0;
+    // where you come to rest: just inside the doors, facing the stacks
+    player.pos.set(0, 0, Math.max(1.7, radius * 0.62));
+    player.vel.set(0, 0, 0);
+    player.yaw = 0;
+    player.pitch = 0;
     if (reducedMotion() || introPlayed) {
-      ctrl.dist = ctrl.tDist; ctrl.phi = ctrl.tPhi; ctrl.theta = ctrl.tTheta;
       introPlayed = true;
       return;
     }
     introPlayed = true;
-    // start high inside the light shaft, looking down over the hall,
-    // then swoop down and around to eye level
-    ctrl.dist = 0.05; ctrl.phi = 0.12; ctrl.theta = -2.6;
-    ctrl.target.y = 1.05;
-    gsap.to(ctrl, { dist: ctrl.tDist, duration: 3.0, ease: "power3.inOut" });
-    gsap.to(ctrl, { phi: ctrl.tPhi, duration: 3.0, ease: "power2.inOut" });
-    gsap.to(ctrl, { theta: ctrl.tTheta, duration: 3.2, ease: "power2.out" });
-    ctrl.lastInput = performance.now() + 2500; // hold off the auto-orbit briefly
+    // drift down out of the dome, turning to face the shelves
+    player.flyY = 3.1;
+    player.yaw = -2.4;
+    player.pitch = -0.6;
+    gsap.to(player, { flyY: 0, duration: 3.2, ease: "power3.inOut" });
+    gsap.to(player, { yaw: 0, pitch: 0, duration: 3.4, ease: "power2.inOut" });
   }
 
   /* ---------- hover + click ---------- */
 
-  let hoverEvent = null;
-  function queueHover(e) { hoverEvent = e; }
-
   function pick(e) {
-    const r = renderer.domElement.getBoundingClientRect();
-    const x = ((e.clientX - r.left) / r.width) * 2 - 1;
-    const y = -((e.clientY - r.top) / r.height) * 2 + 1;
-    raycaster.setFromCamera({ x, y }, camera);
+    if (e) {
+      const r = renderer.domElement.getBoundingClientRect();
+      const x = ((e.clientX - r.left) / r.width) * 2 - 1;
+      const y = -((e.clientY - r.top) / r.height) * 2 + 1;
+      raycaster.setFromCamera({ x, y }, camera);
+    } else {
+      raycaster.setFromCamera({ x: 0, y: 0 }, camera);   // the crosshair
+    }
+    raycaster.far = 6;
     const meshes = [];
     for (const rec of bookNodes.values()) meshes.push(rec.mesh);
     const hit = raycaster.intersectObjects(meshes, false)[0];
@@ -1093,7 +1748,15 @@ import * as THREE from "./vendor/three.module.min.js";
       });
     }
     hovered = rec;
-    renderer.domElement.style.cursor = rec ? "pointer" : "";
+    if (focusEl) {
+      if (rec) {
+        focusEl.textContent = `${(rec.b.title || "untitled").toLowerCase()} — ${authorsOf(rec.b).toLowerCase()}`;
+        focusEl.classList.add("on");
+      } else {
+        focusEl.classList.remove("on");
+      }
+    }
+    crossEl?.classList.toggle("hot", !!rec);
     if (rec && rec.home && rec !== presenting && !reducedMotion()) {
       const p = rec.home.pos.clone().addScaledVector(rec.out, 0.07);
       gsap.to(rec.mesh.position, {
@@ -1121,6 +1784,7 @@ import * as THREE from "./vendor/three.module.min.js";
         shadowDirty = true;
       },
       onComplete: () => {
+        document.exitPointerLock?.();   // hand the cursor back for the sheet
         openShelfBook(rec.b);
         // ease it home underneath the sheet
         gsap.delayedCall(0.7, () => {
@@ -1135,23 +1799,20 @@ import * as THREE from "./vendor/three.module.min.js";
 
   /* ---------- render loop ---------- */
 
+  let lastT = 0;
+  let hoverFrame = 0;
+
   function tick(t) {
-    if (hoverEvent) {
-      const e = hoverEvent;
-      hoverEvent = null;
-      setHover(pick(e));
-    }
+    const dt = Math.min(0.05, lastT ? (t - lastT) / 1000 : 0.016);
+    lastT = t;
 
-    // gentle auto-orbit after a few seconds of stillness
-    if (!reducedMotion() && performance.now() - ctrl.lastInput > 7000) {
-      ctrl.autoSpin = Math.min(1, ctrl.autoSpin + 0.004);
-    } else {
-      ctrl.autoSpin = 0;
-    }
-    ctrl.tTheta += 0.0009 * ctrl.autoSpin;
+    applyCamera(dt);
+    tickAmbience(t, dt);
 
-    applyCamera();
-    tickDust(t);
+    // the crosshair rests on a book: pull it out a whisker and name it
+    if (pointerLocked && !presenting && (hoverFrame++ % 6 === 0)) {
+      setHover(pick(null));
+    }
 
     if (shadowDirty) {
       renderer.shadowMap.needsUpdate = true;
@@ -1178,6 +1839,7 @@ import * as THREE from "./vendor/three.module.min.js";
   function setRunning(on) {
     if (!renderer || on === running) return;
     running = on;
+    if (!on) { keys.clear(); lastT = 0; }
     renderer.setAnimationLoop(on ? tick : null);
   }
 
@@ -1207,19 +1869,18 @@ import * as THREE from "./vendor/three.module.min.js";
     worldEl.prepend(canvas);
 
     scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0a0e16);
-    scene.fog = new THREE.FogExp2(0x0a0e16, 0.05);
+    scene.background = new THREE.Color(0x0d0906);
+    scene.fog = new THREE.FogExp2(0x0d0906, 0.045);
 
-    camera = new THREE.PerspectiveCamera(55, 1, 0.05, 40);
+    camera = new THREE.PerspectiveCamera(62, 1, 0.05, 40);
     raycaster = new THREE.Raycaster();
 
     assets = buildRoom();
     bindControls(renderer.domElement);
-    renderer.domElement.addEventListener("click", (e) => {
-      if (dragDist > 8) return;   // that was an orbit, not a tap
-      const rec = pick(e);
-      if (rec) present(rec);
-    });
+
+    setHint(coarsePointer()
+      ? "left thumb to walk · right thumb to look · tap a book"
+      : "click to step inside · wasd to walk · mouse to look");
 
     new ResizeObserver(resize).observe(worldEl);
     resize();
@@ -1267,7 +1928,7 @@ import * as THREE from "./vendor/three.module.min.js";
     resize();
     if (loading) { pendingEnter = true; return; }  // re-run with the latest scope after
     const first = !books;
-    if (first) countEl.textContent = "opening the hall…";
+    if (first) countEl.textContent = "unlocking the library…";
     loading = true;
     let fresh;
     try {
