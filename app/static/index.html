@@ -70,18 +70,15 @@
           <button id="scan-stop" class="btn secondary wide hidden">stop camera</button>
           <div id="scan-status" class="scan-status"></div>
         </div>
-        <h2><span class="slashes">//</span> or type the code</h2>
-        <form id="manual-form" class="row-form">
-          <input id="manual-code" inputmode="numeric" placeholder="isbn or upc — 10, 12 or 13 digits">
-          <button class="btn primary" type="submit">look up</button>
-        </form>
+        <p class="empty">no camera handy? type anything — a title, an author, or a barcode
+          (even part of one) — into <button type="button" class="link-btn" id="goto-search">⌕ search</button></p>
       </section>
 
       <!-- search -->
       <section id="view-search" class="view hidden">
-        <h2><span class="slashes">//</span> search title or author</h2>
+        <h2><span class="slashes">//</span> search title, author, or barcode</h2>
         <form id="search-form" class="row-form">
-          <input id="search-input" placeholder="e.g. way of kings sanderson" autocapitalize="none">
+          <input id="search-input" placeholder="e.g. way of kings — or an isbn/upc, even partial" autocapitalize="none">
           <button class="btn primary" type="submit">search</button>
         </form>
         <div id="search-results"></div>
