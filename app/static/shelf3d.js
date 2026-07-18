@@ -674,13 +674,16 @@ import * as THREE from "./vendor/three.module.min.js";
   const forwardOf = (yaw) => tmpV.set(-Math.sin(yaw), 0, -Math.cos(yaw));
 
   function applyCamera(dt) {
-    // desired walk direction in the ground plane
+    // desired walk direction in the ground plane (frozen while a book is
+    // held up in front of you, so it stays put over the sheet)
     let mx = 0, mz = 0;
-    if (keys.has("KeyW") || keys.has("ArrowUp")) mz += 1;
-    if (keys.has("KeyS") || keys.has("ArrowDown")) mz -= 1;
-    if (keys.has("KeyA") || keys.has("ArrowLeft")) mx -= 1;
-    if (keys.has("KeyD") || keys.has("ArrowRight")) mx += 1;
-    mx += stick.x; mz -= stick.y;
+    if (!presenting) {
+      if (keys.has("KeyW") || keys.has("ArrowUp")) mz += 1;
+      if (keys.has("KeyS") || keys.has("ArrowDown")) mz -= 1;
+      if (keys.has("KeyA") || keys.has("ArrowLeft")) mx -= 1;
+      if (keys.has("KeyD") || keys.has("ArrowRight")) mx += 1;
+      mx += stick.x; mz -= stick.y;
+    }
     const mag = Math.hypot(mx, mz);
     if (mag > 1) { mx /= mag; mz /= mag; }
 
@@ -1547,7 +1550,7 @@ import * as THREE from "./vendor/three.module.min.js";
     const s = sizeOf(b);
     mesh.scale.set(s.w, s.h, s.th);
 
-    const rec = { b, mesh, canvas, ctx, tex, cloth, home: null, out: null, hoverT: null, dead: false };
+    const rec = { b, mesh, canvas, ctx, tex, cloth, home: null, out: null, hoverT: null, dead: false, floating: false };
     mesh.userData.rec = rec;
 
     // upgrade to the real cover once (and only once) it arrives
@@ -1571,6 +1574,7 @@ import * as THREE from "./vendor/three.module.min.js";
   }
 
   function disposeBook(rec) {
+    if (presenting === rec) presenting = null;
     rec.dead = true;
     scene.remove(rec.mesh);
     rec.tex.dispose();
@@ -1599,18 +1603,19 @@ import * as THREE from "./vendor/three.module.min.js";
     if (dist < 0.002) { snapTo(rec, pl); return; }
     gsap.killTweensOf(rec.mesh.position);   // a hover pull-out must not fight the flight
 
-    // control point: lifted and pulled toward the center of the room, so
-    // flights sweep over the rose instead of clipping the cases
+    // control point: pulled toward the middle of the hall and kept just
+    // overhead, so from inside the room the flights sweep right past you
+    // (and clear the rose cloche) instead of arcing out of view
     const mid = p0.clone().lerp(p1, 0.5);
-    mid.x *= 0.45; mid.z *= 0.45;
-    mid.y += 0.5 + Math.min(1.6, dist * 0.32);
+    mid.x *= 0.4; mid.z *= 0.4;
+    mid.y = Math.max(1.85, mid.y + 0.35 + Math.min(1.1, dist * 0.2));
 
     const spin = (jitter(rec.b, "spin")) * 1.4;
     const axis = new THREE.Vector3(0, 1, 0);
     const st = { t: 0 };
     gsap.to(st, {
       t: 1,
-      duration: 0.85 + Math.min(0.7, dist * 0.09),
+      duration: 1.05 + Math.min(0.9, dist * 0.12),
       delay,
       ease: "power2.inOut",
       onUpdate: () => {
@@ -1675,8 +1680,15 @@ import * as THREE from "./vendor/three.module.min.js";
         scene.add(rec.mesh);
         if (anim && !firstBuild) dropIn(rec, pl, Math.min(0.6, i * 0.05));
         else snapTo(rec, pl);
+      } else if (rec === presenting) {
+        // a book held up in front of the reader keeps floating; it learns
+        // its new shelf and flies there once the sheet closes
+        rec.home = pl;
+        rec.out = pl.out;
       } else if (anim) {
-        flyTo(rec, pl, Math.min(0.55, i * 0.006 + Math.abs(jitter(b, "d")) * 0.12));
+        // a long stagger turns the resort into a stream of books gliding
+        // past the reader instead of one near-instant blur
+        flyTo(rec, pl, Math.min(1.3, i * 0.045) + Math.abs(jitter(b, "d")) * 0.15);
       } else {
         snapTo(rec, pl);
       }
@@ -1766,35 +1778,53 @@ import * as THREE from "./vendor/three.module.min.js";
     }
   }
 
+  // where a held book floats: in front of the camera, lifted so it hangs
+  // above the detail sheet instead of hiding behind it
+  const tmpV3 = new THREE.Vector3();
+  function floatPose(outP, outQ) {
+    outP.set(0, 0, -1).applyQuaternion(camera.quaternion);
+    tmpV3.set(0, 1, 0).applyQuaternion(camera.quaternion);
+    outP.multiplyScalar(0.5).add(camera.position).addScaledVector(tmpV3, 0.16);
+    outQ.copy(camera.quaternion);
+  }
+
   function present(rec) {
     if (presenting) return;
     presenting = rec;
     gsap.killTweensOf(rec.mesh.position);
-    const dir = tmpV.set(0, 0, -1).applyQuaternion(camera.quaternion);
-    const p = camera.position.clone().addScaledVector(dir, 0.55);
-    const q = camera.quaternion.clone();
     const st = { t: 0 };
     const p0 = rec.mesh.position.clone();
     const q0 = rec.mesh.quaternion.clone();
     gsap.to(st, {
       t: 1, duration: reducedMotion() ? 0 : 0.55, ease: "power3.out",
       onUpdate: () => {
-        rec.mesh.position.lerpVectors(p0, p, st.t);
-        rec.mesh.quaternion.slerpQuaternions(q0, q, st.t);
+        floatPose(tmpV, tmpQ);
+        rec.mesh.position.lerpVectors(p0, tmpV, st.t);
+        rec.mesh.quaternion.slerpQuaternions(q0, tmpQ, st.t);
         shadowDirty = true;
       },
       onComplete: () => {
+        rec.floating = true;            // it hangs here until the sheet closes
         document.exitPointerLock?.();   // hand the cursor back for the sheet
         openShelfBook(rec.b);
-        // ease it home underneath the sheet
-        gsap.delayedCall(0.7, () => {
-          if (!rec.dead && rec.home) {
-            flyTo(rec, rec.home, 0);
-          }
-          presenting = null;
-        });
       },
     });
+  }
+
+  // the held book drifts gently in place while the sheet is up
+  const tmpQ2 = new THREE.Quaternion();
+  const upAxis = new THREE.Vector3(0, 1, 0);
+  function tickFloating(t, dt) {
+    if (!presenting || !presenting.floating) return;
+    floatPose(tmpV, tmpQ);
+    if (!reducedMotion()) {
+      tmpV.y += Math.sin(t * 0.0016) * 0.008;
+      tmpQ.multiply(tmpQ2.setFromAxisAngle(upAxis, Math.sin(t * 0.0006) * 0.16));
+    }
+    const k = 1 - Math.exp(-dt * 10);
+    presenting.mesh.position.lerp(tmpV, k);
+    presenting.mesh.quaternion.slerp(tmpQ, k);
+    shadowDirty = true;
   }
 
   /* ---------- render loop ---------- */
@@ -1808,6 +1838,7 @@ import * as THREE from "./vendor/three.module.min.js";
 
     applyCamera(dt);
     tickAmbience(t, dt);
+    tickFloating(t, dt);
 
     // the crosshair rests on a book: pull it out a whisker and name it
     if (pointerLocked && !presenting && (hoverFrame++ % 6 === 0)) {
@@ -1884,6 +1915,17 @@ import * as THREE from "./vendor/three.module.min.js";
 
     new ResizeObserver(resize).observe(worldEl);
     resize();
+
+    // the held book flies home the moment the detail sheet closes
+    const sheetEl = document.getElementById("sheet");
+    new MutationObserver(() => {
+      if (presenting && sheetEl.classList.contains("hidden")) {
+        const rec = presenting;
+        presenting = null;
+        rec.floating = false;
+        if (!rec.dead && rec.home) flyTo(rec, rec.home, 0.05);
+      }
+    }).observe(sheetEl, { attributes: true, attributeFilter: ["class"] });
 
     // pause when the tab or the view goes away
     document.addEventListener("visibilitychange", () => setRunning(!document.hidden && viewVisible()));
