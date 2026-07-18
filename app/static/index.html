@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#0d1420">
+  <meta name="theme-color" content="#161009">
   <title>book-bot</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon-512.png" type="image/png">
@@ -23,7 +23,7 @@
         <span class="term-title">you@book-bot: ~</span>
       </div>
       <div class="term-body">
-        <div class="login-brand"><span class="prompt">❯</span> book-bot <span class="prompt">//</span> personal library terminal</div>
+        <div class="login-brand"><span class="prompt">❦</span> book-bot <span class="prompt">//</span> a private library</div>
         <form id="login-form">
           <label class="field"><span>username</span>
             <input id="login-username" autocomplete="username" autocapitalize="none" required>
@@ -115,7 +115,10 @@
           </div>
         </div>
         <div id="world3d" class="world3d hidden">
-          <div id="world3d-hint" class="world3d-hint">drag to look around · scroll or pinch to zoom · tap a book</div>
+          <div id="world3d-hint" class="world3d-hint">click to step inside · wasd to walk · mouse to look</div>
+          <div id="world3d-crosshair" class="world3d-crosshair"></div>
+          <div id="world3d-focus" class="world3d-focus"></div>
+          <div id="world3d-stick" class="world3d-stick"><div id="world3d-stick-nub" class="world3d-stick-nub"></div></div>
         </div>
         <div id="bookcase" class="bookcase"></div>
       </section>
