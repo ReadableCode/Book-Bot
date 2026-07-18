@@ -662,12 +662,22 @@ import * as THREE from "./vendor/three.module.min.js";
         p.z = c.z + (dz / d) * c.r;
       }
     }
-    // the shelf ring ahead, the rotunda wall through the opening behind
+    // the bookcase ring is a solid band: push to whichever face is nearer,
+    // so you can browse in front of it or wander the passage behind it —
+    // never get yanked through to the middle of the room
     const r = Math.hypot(p.x, p.z);
     if (r > 1e-4) {
       const a = Math.atan2(p.x, -p.z);   // matches bay placement angles
-      const maxR = Math.abs(a) < arcHalf + 0.10 ? radius - 0.55 : roomWallR - 0.6;
-      if (r > maxR) { p.x *= maxR / r; p.z *= maxR / r; }
+      if (Math.abs(a) < arcHalf + 0.06) {
+        const inner = radius - 0.55, outer = radius + 0.42;
+        if (r > inner && r < outer) {
+          const s = (r - inner < outer - r ? inner : outer) / r;
+          p.x *= s; p.z *= s;
+        }
+      }
+      const wallMax = roomWallR - 0.6;
+      const r2 = Math.hypot(p.x, p.z);
+      if (r2 > wallMax) { p.x *= wallMax / r2; p.z *= wallMax / r2; }
     }
   }
 
@@ -846,14 +856,24 @@ import * as THREE from "./vendor/three.module.min.js";
 
   const goldMat = () => new THREE.MeshStandardMaterial({ color: 0x8a6a2c, roughness: 0.35, metalness: 0.85 });
 
+  // a real little flame: a white-hot core inside a soft amber halo, both
+  // additive sprites, flickering together
   function candleFlame(scale = 1) {
-    const m = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: assets.dustTex, color: 0xffbe6a, transparent: true, opacity: 0.95,
+    const g = new THREE.Group();
+    const glow = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: assets.dustTex, color: 0xff9d4f, transparent: true, opacity: 0.38,
       blending: THREE.AdditiveBlending, depthWrite: false,
     }));
-    m.scale.setScalar(0.075 * scale);
-    flames.push({ obj: m, seed: Math.random() * Math.PI * 2, base: 0.075 * scale });
-    return m;
+    glow.scale.setScalar(0.18 * scale);
+    const core = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: assets.dustTex, color: 0xfff2cd, transparent: true, opacity: 0.95,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    }));
+    core.scale.setScalar(0.055 * scale);
+    core.position.y = 0.008;
+    g.add(glow, core);
+    flames.push({ obj: g, core, glow, seed: Math.random() * Math.PI * 2 });
+    return g;
   }
 
   // a floor-standing candelabra — the Lumière nod by the windows
@@ -889,11 +909,27 @@ import * as THREE from "./vendor/three.module.min.js";
   function buildChandelier(y, oculusY) {
     const g = new THREE.Group();
     const gold = goldMat();
-    const chain = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, oculusY - y, 6), gold);
+    const chain = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, oculusY - y, 6), gold);
     chain.position.y = (oculusY - y) / 2;
     g.add(chain);
-    const hub = new THREE.Mesh(new THREE.SphereGeometry(0.09, 12, 8), gold);
+    // visible chain links climbing toward the oculus
+    const linkGeo = new THREE.TorusGeometry(0.035, 0.008, 6, 12);
+    for (let i = 0; i < 8; i++) {
+      const link = new THREE.Mesh(linkGeo, gold);
+      link.position.y = 0.25 + i * 0.28;
+      link.rotation.y = (i % 2) * Math.PI / 2;
+      g.add(link);
+    }
+    const hub = new THREE.Mesh(new THREE.SphereGeometry(0.09, 14, 10), gold);
     g.add(hub);
+    // turned finial hanging beneath the hub
+    const finial = new THREE.Mesh(new THREE.ConeGeometry(0.055, 0.16, 10), gold);
+    finial.rotation.x = Math.PI;
+    finial.position.y = -0.14;
+    g.add(finial);
+    const drop = new THREE.Mesh(new THREE.SphereGeometry(0.028, 8, 6), gold);
+    drop.position.y = -0.24;
+    g.add(drop);
     const candleMat = new THREE.MeshStandardMaterial({ color: 0xe8dcbe, roughness: 0.6 });
     const rings = [
       { r: 0.85, n: 12, dy: 0 },
@@ -907,11 +943,14 @@ import * as THREE from "./vendor/three.module.min.js";
       for (let i = 0; i < ring.n; i++) {
         const a = (i / ring.n) * Math.PI * 2;
         const px = Math.cos(a) * ring.r, pz = Math.sin(a) * ring.r;
-        const candle = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.15, 6), candleMat);
-        candle.position.set(px, ring.dy + 0.095, pz);
+        const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.014, 0.03, 10), gold);
+        cup.position.set(px, ring.dy + 0.015, pz);
+        g.add(cup);
+        const candle = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.15, 8), candleMat);
+        candle.position.set(px, ring.dy + 0.105, pz);
         g.add(candle);
         const fl = candleFlame();
-        fl.position.set(px, ring.dy + 0.215, pz);
+        fl.position.set(px, ring.dy + 0.225, pz);
         g.add(fl);
       }
       // spokes to the hub
@@ -931,89 +970,144 @@ import * as THREE from "./vendor/three.module.min.js";
     return g;
   }
 
-  // the enchanted rose under glass, mid-hall on a marble pedestal
+  // the enchanted rose under glass, enthroned in the window alcove
   function buildRose() {
     const g = new THREE.Group();
+    const gold = goldMat();
 
-    const marble = new THREE.MeshStandardMaterial({ color: 0x35303c, roughness: 0.35, metalness: 0.1 });
-    const column = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.2, 0.92, 16), marble);
-    column.position.y = 0.46;
+    const marble = new THREE.MeshStandardMaterial({ color: 0x35303c, roughness: 0.32, metalness: 0.1 });
+    const marbleLight = new THREE.MeshStandardMaterial({ color: 0x4a4452, roughness: 0.38, metalness: 0.1 });
+
+    // a low wooden dais, then plinth, molding, fluted column, collar, cap
+    const dais = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.66, 0.05, 24), new THREE.MeshStandardMaterial({ map: assets.wood, roughness: 0.75 }));
+    dais.position.y = 0.025;
+    dais.receiveShadow = true;
+    g.add(dais);
+    const plinth = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.1, 0.5), marble);
+    plinth.position.y = 0.1;
+    plinth.castShadow = true;
+    g.add(plinth);
+    const molding = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.26, 0.06, 20), gold);
+    molding.position.y = 0.18;
+    g.add(molding);
+    const column = new THREE.Mesh(new THREE.CylinderGeometry(0.155, 0.19, 0.72, 24), marbleLight);
+    column.position.y = 0.57;
     column.castShadow = true;
     g.add(column);
-    const plate = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.26, 0.035, 20), goldMat());
-    plate.position.y = 0.94;
+    for (const [ry, rr] of [[0.22, 0.2], [0.91, 0.17]]) {
+      const collar = new THREE.Mesh(new THREE.TorusGeometry(rr, 0.016, 8, 24), gold);
+      collar.rotation.x = Math.PI / 2;
+      collar.position.y = ry;
+      g.add(collar);
+    }
+    const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.24, 0.05, 24), marble);
+    cap.position.y = 0.955;
+    g.add(cap);
+    const plate = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 0.02, 24), gold);
+    plate.position.y = 0.99;
     g.add(plate);
 
+    // the rose itself: layered petals around a bud, sepals beneath,
+    // a leaning stem with paired leaves
     const rose = new THREE.Group();
-    const stem = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.006, 0.008, 0.26, 5),
-      new THREE.MeshStandardMaterial({ color: 0x2c4428, roughness: 0.8 }),
-    );
-    stem.position.y = 0.13;
-    rose.add(stem);
-    const leaf = new THREE.Mesh(
-      new THREE.SphereGeometry(0.03, 6, 4),
-      new THREE.MeshStandardMaterial({ color: 0x2c4428, roughness: 0.8 }),
-    );
-    leaf.scale.set(1, 0.25, 0.5);
-    leaf.position.set(0.03, 0.12, 0);
-    rose.add(leaf);
+    const stemMat = new THREE.MeshStandardMaterial({ color: 0x2c4428, roughness: 0.8 });
+    const stemLo = new THREE.Mesh(new THREE.CylinderGeometry(0.007, 0.009, 0.15, 6), stemMat);
+    stemLo.position.y = 0.075;
+    rose.add(stemLo);
+    const stemHi = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.007, 0.14, 6), stemMat);
+    stemHi.position.set(0.012, 0.21, 0);
+    stemHi.rotation.z = -0.18;
+    rose.add(stemHi);
+    for (const [lx, ly, la] of [[0.045, 0.1, 0.5], [-0.04, 0.16, -0.7]]) {
+      const leaf = new THREE.Mesh(new THREE.SphereGeometry(0.028, 8, 5), stemMat);
+      leaf.scale.set(1, 0.22, 0.5);
+      leaf.position.set(lx, ly, 0);
+      leaf.rotation.z = la;
+      rose.add(leaf);
+    }
     const bloomMat = new THREE.MeshStandardMaterial({
       color: 0x8e1626, roughness: 0.5, emissive: 0x400d16, emissiveIntensity: 0.55,
     });
-    const bloom = new THREE.Mesh(new THREE.IcosahedronGeometry(0.036, 1), bloomMat);
-    bloom.scale.set(1, 1.3, 1);
-    bloom.position.y = 0.285;
-    rose.add(bloom);
-    // outer petals: flattened spheres skirting the bloom
+    const bloomDeep = new THREE.MeshStandardMaterial({
+      color: 0x6d0f1e, roughness: 0.55, emissive: 0x330a11, emissiveIntensity: 0.5,
+    });
+    const bloomY = 0.3;
+    // sepals: five green points curling from under the bloom
     for (let i = 0; i < 5; i++) {
       const a = (i / 5) * Math.PI * 2;
-      const petal = new THREE.Mesh(new THREE.SphereGeometry(0.02, 6, 4), bloomMat);
-      petal.scale.set(1, 0.45, 0.7);
-      petal.position.set(Math.cos(a) * 0.026, 0.262, Math.sin(a) * 0.026);
+      const sepal = new THREE.Mesh(new THREE.ConeGeometry(0.008, 0.05, 5), stemMat);
+      sepal.position.set(Math.cos(a) * 0.02, bloomY - 0.035, Math.sin(a) * 0.02);
+      sepal.rotation.z = Math.cos(a) * 0.9;
+      sepal.rotation.x = -Math.sin(a) * 0.9;
+      rose.add(sepal);
+    }
+    // bud at the heart, an upright inner ring, an opened outer ring
+    const bud = new THREE.Mesh(new THREE.IcosahedronGeometry(0.02, 1), bloomDeep);
+    bud.scale.set(1, 1.4, 1);
+    bud.position.y = bloomY + 0.015;
+    rose.add(bud);
+    for (let i = 0; i < 5; i++) {
+      const a = (i / 5) * Math.PI * 2 + 0.3;
+      const petal = new THREE.Mesh(new THREE.SphereGeometry(0.018, 8, 5), bloomMat);
+      petal.scale.set(1, 0.55, 0.62);
+      petal.position.set(Math.cos(a) * 0.016, bloomY + 0.012, Math.sin(a) * 0.016);
       petal.rotation.y = -a;
-      petal.rotation.z = 0.5;
+      petal.rotation.z = 1.05;
+      rose.add(petal);
+    }
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      const petal = new THREE.Mesh(new THREE.SphereGeometry(0.022, 8, 5), bloomMat);
+      petal.scale.set(1, 0.4, 0.72);
+      petal.position.set(Math.cos(a) * 0.03, bloomY - 0.006, Math.sin(a) * 0.03);
+      petal.rotation.y = -a;
+      petal.rotation.z = 0.55;
       rose.add(petal);
     }
     // the rose floats — an enchantment, after all
-    rose.position.y = 1.02;
+    rose.position.y = 1.06;
     g.add(rose);
     roseSpin = rose;
 
     // fallen petals on the plate
     const petalMat = new THREE.MeshStandardMaterial({ color: 0x7c1626, roughness: 0.6, side: THREE.DoubleSide });
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 4; i++) {
       const p = new THREE.Mesh(new THREE.CircleGeometry(0.018, 6), petalMat);
       p.rotation.x = -Math.PI / 2 + 0.15 * (i - 1);
       p.rotation.z = i * 2.1;
-      p.position.set(Math.cos(i * 2.4) * 0.12, 0.962, Math.sin(i * 2.4) * 0.12);
+      p.position.set(Math.cos(i * 1.9) * 0.12, 1.005, Math.sin(i * 1.9) * 0.12);
       g.add(p);
     }
 
-    // glass cloche: a faint shell plus an additive rim so it catches the candles
+    // glass cloche: a faint shell plus an additive rim so it catches the
+    // candles, seated in a gilt filigree ring
     const dome = new THREE.Mesh(
-      new THREE.SphereGeometry(0.22, 20, 14, 0, Math.PI * 2, 0, Math.PI / 2),
+      new THREE.SphereGeometry(0.24, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2),
       new THREE.MeshPhongMaterial({
         color: 0xbfd0e0, transparent: true, opacity: 0.13, shininess: 90, specular: 0x99aabb,
       }),
     );
     dome.scale.y = 1.9;
-    dome.position.y = 0.958;
+    dome.position.y = 1.0;
     g.add(dome);
     const rim = new THREE.Mesh(
-      new THREE.SphereGeometry(0.222, 20, 14, 0, Math.PI * 2, 0, Math.PI / 2),
+      new THREE.SphereGeometry(0.242, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2),
       new THREE.MeshBasicMaterial({
         color: 0x8fb0d8, transparent: true, opacity: 0.05,
         blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.BackSide,
       }),
     );
     rim.scale.y = 1.9;
-    rim.position.y = 0.958;
+    rim.position.y = 1.0;
     g.add(rim);
+    const filigree = new THREE.Mesh(new THREE.TorusGeometry(0.24, 0.012, 8, 32), gold);
+    filigree.rotation.x = Math.PI / 2;
+    filigree.position.y = 1.0;
+    g.add(filigree);
 
     // rose-light spills out of the glass
     const roseLight = new THREE.PointLight(0xff5f78, 1.4, 3.5, 1.9);
-    roseLight.position.y = 1.35;
+    roseLight.position.y = 1.4;
     g.add(roseLight);
 
     // enchanted motes rising inside the cloche
@@ -1023,7 +1117,7 @@ import * as THREE from "./vendor/three.module.min.js";
     for (let i = 0; i < N; i++) {
       const r = Math.random() * 0.16, a = Math.random() * Math.PI * 2;
       pos[i * 3] = Math.cos(a) * r;
-      pos[i * 3 + 1] = 0.98 + Math.random() * 0.36;
+      pos[i * 3 + 1] = 1.02 + Math.random() * 0.38;
       pos[i * 3 + 2] = Math.sin(a) * r;
       sparkleSeed[i] = Math.random() * Math.PI * 2;
     }
@@ -1034,6 +1128,83 @@ import * as THREE from "./vendor/three.module.min.js";
       blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true,
     }));
     g.add(sparkles);
+
+    return g;
+  }
+
+  // a reading desk: table, chair, an open book, a lit candlestick, a quill
+  function buildDesk() {
+    const g = new THREE.Group();
+    const woodMat = new THREE.MeshStandardMaterial({ map: assets.wood, roughness: 0.7 });
+    const dark = new THREE.MeshStandardMaterial({ color: 0x241708, roughness: 0.85 });
+    const gold = goldMat();
+
+    const box = (w, h, d, x, y, z, mat = woodMat) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+      m.position.set(x, y, z);
+      m.castShadow = true;
+      m.receiveShadow = true;
+      g.add(m);
+      return m;
+    };
+
+    // table: top, apron, four turned legs
+    box(0.98, 0.04, 0.58, 0, 0.74, 0);
+    box(0.88, 0.07, 0.48, 0, 0.685, 0, dark);
+    for (const [lx, lz] of [[-0.43, -0.23], [0.43, -0.23], [-0.43, 0.23], [0.43, 0.23]]) {
+      const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.032, 0.72, 8), dark);
+      leg.position.set(lx, 0.36, lz);
+      leg.castShadow = true;
+      g.add(leg);
+    }
+
+    // chair, pulled up on the near side
+    box(0.4, 0.035, 0.38, 0, 0.45, 0.52);
+    box(0.4, 0.45, 0.035, 0, 0.7, 0.71, woodMat);
+    for (const [lx, lz] of [[-0.17, 0.36], [0.17, 0.36], [-0.17, 0.69], [0.17, 0.69]]) {
+      const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.024, 0.45, 6), dark);
+      leg.position.set(lx, 0.225, lz);
+      g.add(leg);
+    }
+
+    // an open book, mid-read
+    const pageMat = new THREE.MeshStandardMaterial({ color: 0xe6dcc3, roughness: 0.85 });
+    for (const s of [-1, 1]) {
+      const leaf = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.012, 0.22), pageMat);
+      leaf.position.set(s * 0.073, 0.775, 0.06);
+      leaf.rotation.z = -s * 0.12;
+      g.add(leaf);
+    }
+    const spineMat = new THREE.MeshStandardMaterial({ color: 0x4a2a2c, roughness: 0.6 });
+    const bspine = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.014, 0.22), spineMat);
+    bspine.position.set(0, 0.768, 0.06);
+    g.add(bspine);
+
+    // candlestick with a live flame
+    const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.035, 0.09, 10), gold);
+    stick.position.set(-0.32, 0.805, -0.14);
+    g.add(stick);
+    const candle = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.013, 0.013, 0.1, 8),
+      new THREE.MeshStandardMaterial({ color: 0xe8dcbe, roughness: 0.6 }),
+    );
+    candle.position.set(-0.32, 0.9, -0.14);
+    g.add(candle);
+    const fl = candleFlame(0.8);
+    fl.position.set(-0.32, 0.97, -0.14);
+    g.add(fl);
+
+    // inkwell and quill
+    const ink = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.024, 0.035, 8), dark);
+    ink.position.set(0.3, 0.777, -0.16);
+    g.add(ink);
+    const quill = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.028, 0.16),
+      new THREE.MeshStandardMaterial({ color: 0xd8d2c2, roughness: 0.9, side: THREE.DoubleSide }),
+    );
+    quill.position.set(0.31, 0.86, -0.15);
+    quill.rotation.set(0.5, 0.4, 0.9);
+    g.add(quill);
 
     return g;
   }
@@ -1050,7 +1221,7 @@ import * as THREE from "./vendor/three.module.min.js";
     }
     flames = [];
     roomRoot = new THREE.Group();
-    colliders = [{ x: 0, z: 0, r: 0.75 }];   // the rose pedestal
+    colliders = [];   // rebuilt below as furniture is placed
     const ceilH = Math.max(5.4, wallR * 1.1);
     const galleryY = Math.min(3.2, ceilH * 0.58);
 
@@ -1188,29 +1359,56 @@ import * as THREE from "./vendor/three.module.min.js";
       colliders.push({ x: px, z: pz, r: 0.42 });
     }
 
-    // wall sconces: candle slivers with a soft halo, purely decorative
-    const sconceMat = new THREE.MeshBasicMaterial({ color: 0xffd9a0 });
-    const haloMat = new THREE.MeshBasicMaterial({
-      map: assets.dustTex, color: 0xff9d55, transparent: true, opacity: 0.5,
-      blending: THREE.AdditiveBlending, depthWrite: false,
-    });
+    // wall sconces: real little fixtures now — a gilt backplate, a curved
+    // bracket arm, a drip cup, a wax candle, and a flickering flame
+    const sconceGold = goldMat();
+    const waxMat = new THREE.MeshStandardMaterial({ color: 0xe8dcbe, roughness: 0.6 });
     const nS = 10;
     for (let i = 0; i < nS; i++) {
       const a = (i / nS) * Math.PI * 2 + Math.PI / nS;
-      const px = Math.sin(a) * (wallR - 0.06), pz = -Math.cos(a) * (wallR - 0.06);
-      const sconce = new THREE.Mesh(new THREE.PlaneGeometry(0.05, 0.42), sconceMat);
-      sconce.position.set(px, 2.6, pz);
-      sconce.lookAt(0, 2.6, 0);
-      roomRoot.add(sconce);
-      const halo = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 1.1), haloMat);
-      halo.position.set(px * 0.985, 2.6, pz * 0.985);
-      halo.lookAt(0, 2.6, 0);
-      roomRoot.add(halo);
+      const px = Math.sin(a) * (wallR - 0.1), pz = -Math.cos(a) * (wallR - 0.1);
+      const sc = new THREE.Group();
+      const plaque = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.02, 12), sconceGold);
+      plaque.rotation.x = Math.PI / 2;
+      sc.add(plaque);
+      const arm = new THREE.Mesh(new THREE.TorusGeometry(0.11, 0.011, 6, 14, Math.PI * 0.55), sconceGold);
+      arm.rotation.set(0, Math.PI / 2, -Math.PI * 0.4);
+      arm.position.set(0, -0.06, 0.06);
+      sc.add(arm);
+      const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.036, 0.018, 0.035, 10), sconceGold);
+      cup.position.set(0, 0.045, 0.16);
+      sc.add(cup);
+      const candle = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.14, 8), waxMat);
+      candle.position.set(0, 0.13, 0.16);
+      sc.add(candle);
+      const fl = candleFlame(1.5);
+      fl.position.set(0, 0.24, 0.16);
+      sc.add(fl);
+      sc.position.set(px, 2.55, pz);
+      sc.lookAt(0, 2.55, 0);
+      roomRoot.add(sc);
     }
 
     roomRoot.add(buildChandelier(Math.min(3.5, ceilH - 1.6), oculusY));
+
+    // the rose keeps court in the window alcove, well behind the reader —
+    // never between you and the shelves
     roseGroup = buildRose();
+    roseGroup.position.set(0, 0, wallR - 1.7);
     roomRoot.add(roseGroup);
+    colliders.push({ x: 0, z: wallR - 1.7, r: 0.72 });
+
+    // reading desks scattered around the hall, facing the stacks
+    const deskAngles = wallR > 6.5 ? [-1.55, -0.85, 0.85, 1.55] : [-1.05, 1.05];
+    const deskR = Math.max(1.6, radius - 1.7);
+    for (const da of deskAngles) {
+      const dx = Math.sin(da) * deskR, dz = -Math.cos(da) * deskR;
+      const desk = buildDesk();
+      desk.position.set(dx, 0, dz);
+      desk.rotation.y = -da + Math.PI;   // chair side toward the room's heart
+      roomRoot.add(desk);
+      colliders.push({ x: dx, z: dz, r: 0.78 });
+    }
 
     scene.add(roomRoot);
     shadowDirty = true;
@@ -1283,21 +1481,22 @@ import * as THREE from "./vendor/three.module.min.js";
     const ts = t * 0.001;
     for (const f of flames) {
       const n = Math.sin(ts * 9 + f.seed) * 0.5 + Math.sin(ts * 23 + f.seed * 2) * 0.5;
-      f.obj.scale.setScalar(f.base * (1 + n * 0.16));
-      f.obj.material.opacity = 0.8 + n * 0.15;
+      f.obj.scale.setScalar(1 + n * 0.16);
+      f.core.material.opacity = 0.85 + n * 0.13;
+      f.glow.material.opacity = 0.32 + n * 0.1;
     }
     if (chandLight) chandLight.intensity = 16 * (1 + Math.sin(ts * 11) * 0.035 + Math.sin(ts * 27) * 0.025);
     // the rose turns slowly under its glass
     if (roseSpin && !reducedMotion()) {
       roseSpin.rotation.y += dt * 0.25;
-      roseSpin.position.y = 1.02 + Math.sin(ts * 0.9) * 0.012;
+      roseSpin.position.y = 1.06 + Math.sin(ts * 0.9) * 0.012;
     }
     // enchanted motes spiralling up inside the cloche
     if (sparkles) {
       const pos = sparkles.geometry.attributes.position;
       for (let i = 0; i < pos.count; i++) {
         let y = pos.getY(i) + 0.0009;
-        if (y > 1.36) y = 0.98;
+        if (y > 1.42) y = 1.02;
         pos.setY(i, y);
         const a = ts * 0.5 + sparkleSeed[i];
         const r = 0.05 + (sparkleSeed[i] % 1) * 0.12;

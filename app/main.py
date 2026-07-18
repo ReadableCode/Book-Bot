@@ -427,6 +427,10 @@ def api_lookup(code: str, auth: AuthContext = Depends(require_auth)):
 
 def _matches_query(item: dict, q: str) -> bool:
     if q.isdigit():
+        # partial codes match too: any run of 4+ digits finds editions whose
+        # isbn-13/isbn-10 contains it (a torn barcode, a half-remembered upc)
+        if len(q) >= 4 and (q in (item.get("isbn13") or "") or q in (item.get("isbn10") or "")):
+            return True
         return item.get("isbn13") == q or q in (item.get("title") or "")
     haystack = f"{item.get('title') or ''} {item.get('authors') or ''}".lower()
     return all(term in haystack for term in q.lower().split())
@@ -446,9 +450,19 @@ def api_search(q: str, auth: AuthContext = Depends(require_auth)):
     norm = metadata.normalize_code(q)
     if norm.get("isbn13"):
         q = norm["isbn13"]
+    digits = "".join(ch for ch in q if ch.isdigit())
+    partial_code = (q.replace("-", "").replace(" ", "").isdigit()
+                    and not (norm.get("isbn13") or norm.get("upc")))
+    if partial_code:
+        q = digits
     local = [_flatten_book(h) for h in store.list_library_books(auth.token, library_ids)]
     local = [item for item in local if _matches_query(item, q)]
     _annotate_read_status(auth, local)
+
+    # a partial (or mistyped) code can only mean "find it on my shelves" —
+    # the external catalogs would just return digit-soup, slowly
+    if partial_code:
+        return {"local": local, "external": []}
 
     external = []
     if norm.get("isbn13"):

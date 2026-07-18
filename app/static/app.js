@@ -364,31 +364,34 @@ async function onBarcode(text) {
   await lookupCode(text, { resumeScannerOnClose: true });
 }
 
-$("#manual-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const code = $("#manual-code").value.trim();
-  if (code) await lookupCode(code, {});
+$("#goto-search").addEventListener("click", () => {
+  switchView("search");
+  $("#search-input").focus();
 });
 
-async function lookupCode(code, { resumeScannerOnClose = false } = {}) {
+// returns true when the sheet opened, so the unified search box knows
+// whether to fall back to a plain search
+async function lookupCode(code, { resumeScannerOnClose = false, quiet = false } = {}) {
   try {
     const data = await api(`/api/lookup?code=${encodeURIComponent(code)}`);
     if (!data.ok) {
-      toast(data.reason, "err");
+      if (!quiet) toast(data.reason, "err");
       if (resumeScannerOnClose) setTimeout(() => Scanner.resume(), 1600);
-      return;
+      return false;
     }
     $("#scan-status").textContent = "";
     if (!data.found) {
       const what = data.isbn13 ? `isbn ${data.isbn13}` : `barcode ${code}`;
-      toast(`${what} wasn't found in google books or open library — try a title search`, "err");
+      if (!quiet) toast(`${what} wasn't found in google books or open library — try a title search`, "err");
       if (resumeScannerOnClose) setTimeout(() => Scanner.resume(), 2200);
-      return;
+      return false;
     }
     openBookSheet(data.metadata, data.ownership, resumeScannerOnClose ? () => Scanner.resume() : null);
+    return true;
   } catch (err) {
     toast(err.message, "err");
     if (resumeScannerOnClose) Scanner.resume();
+    return false;
   }
 }
 
@@ -736,6 +739,20 @@ $("#search-form").addEventListener("submit", async (e) => {
   const q = $("#search-input").value.trim();
   if (!q) return;
   const box = $("#search-results");
+
+  // one box for everything: a complete isbn/upc typed here behaves like the
+  // old "type the code" box and opens the edition sheet directly. Anything
+  // else — words, or a partial code — falls through to search. (Scanning
+  // still validates the check digit; this is only the typed path.)
+  const codeish = q.replace(/[\s-]/g, "");
+  if (/^\d{9}[\dxX]$|^\d{12,13}$/.test(codeish)) {
+    box.innerHTML = `<div class="empty">looking up ${esc(codeish)}…</div>`;
+    if (await lookupCode(codeish, { quiet: true })) {
+      box.innerHTML = "";
+      return;
+    }
+  }
+
   box.innerHTML = `<div class="empty">searching…</div>`;
   try {
     const data = await api(`/api/search?q=${encodeURIComponent(q)}`);
