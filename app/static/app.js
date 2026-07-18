@@ -583,6 +583,29 @@ function bindStatusSwitcher(bookId, current) {
 }
 
 /* add-mode sheet: a book found by scan/search that may or may not be owned */
+// wire the "own a different edition too?" controls: a format picker plus
+// +library / +digital / +wishlist, posting with new_edition so the server
+// files it as a sibling edition of the same work
+function bindAddEdition(prefix, meta) {
+  const add = (status) => async () => {
+    const fmt = $(`#${prefix}-format`).value;
+    if (!fmt) { toast("pick the new edition's format first", "err"); return; }
+    try {
+      const res = await api("/api/books", {
+        method: "POST",
+        body: JSON.stringify({ status, metadata: meta, format: fmt, new_edition: true, library_id: targetLibraryId() }),
+      });
+      toast(res.existed ? `already tracked — now ${HOLD_PHRASES[status]}` : `${fmt} edition added — ${HOLD_PHRASES[status]} ✓`, "ok");
+      refreshStats();
+      invalidateBooks();
+      closeSheet();
+    } catch (err) { toast(err.message, "err"); }
+  };
+  $(`#${prefix}-library`).addEventListener("click", add("library"));
+  $(`#${prefix}-digital`).addEventListener("click", add("digital"));
+  $(`#${prefix}-wishlist`).addEventListener("click", add("wishlist"));
+}
+
 function openBookSheet(meta, ownership, onClose) {
   const exact = ownership.exact;
   let actions;
@@ -592,6 +615,13 @@ function openBookSheet(meta, ownership, onClose) {
       <div class="btnrow">
         <button class="btn secondary" id="sheet-copy">+ another copy</button>
         <button class="btn danger" id="sheet-delete">remove</button>
+      </div>
+      <label class="field"><span>own a different edition too? pick its format</span>
+        ${formatSelect("sheet-new-format", "")}</label>
+      <div class="btnrow">
+        <button class="btn secondary" id="sheet-new-library">+ library</button>
+        <button class="btn secondary" id="sheet-new-digital">+ digital</button>
+        <button class="btn secondary" id="sheet-new-wishlist">+ wishlist</button>
       </div>`;
   } else {
     actions = `
@@ -622,6 +652,7 @@ function openBookSheet(meta, ownership, onClose) {
     });
     bindStatusSwitcher(exact.id, exact.status);
     bindDelete($("#sheet-delete"), exact.id);
+    bindAddEdition("sheet-new", meta);
   } else {
     const add = (status) => async () => {
       try {
@@ -679,6 +710,13 @@ async function openEditionSheet(bookId) {
         <button class="btn primary" id="edit-save">save</button>
         <button class="btn danger" id="edit-delete">remove</button>
       </div>
+      <label class="field"><span>own a different edition too? pick its format</span>
+        ${formatSelect("new-ed-format", "")}</label>
+      <div class="btnrow">
+        <button class="btn secondary" id="new-ed-library">+ library</button>
+        <button class="btn secondary" id="new-ed-digital">+ digital</button>
+        <button class="btn secondary" id="new-ed-wishlist">+ wishlist</button>
+      </div>
     </div>
     <div id="sheet-read"></div>
     ${descBlock(book)}
@@ -701,6 +739,18 @@ async function openEditionSheet(bookId) {
   });
   bindStatusSwitcher(book.id, book.status);
   bindDelete($("#edit-delete"), book.id);
+  bindAddEdition("new-ed", {
+    title: book.title,
+    subtitle: book.subtitle,
+    authors: (book.authors || "").split(",").map((s) => s.trim()).filter(Boolean),
+    publisher: book.publisher,
+    published_date: book.published_date,
+    description: book.description,
+    cover_url: book.cover_url,
+    page_count: book.page_count,
+    language: book.language,
+    genre: book.genre,
+  });
 }
 
 function bindDelete(btn, bookId) {
