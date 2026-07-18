@@ -847,6 +847,11 @@ import * as THREE from "./vendor/three.module.min.js";
 
   let roomRoot = null;
   let roomWallR = 0;
+  let deskSpots = [];                            // {pos, rotY, kind} per labeled desk
+  let deskRoot = null;                           // the data-backed books on the desks
+  const deskRecs = [];                           // book records living on desks
+  let deskData = { wishlist: [], reads: [], sig: null };
+  let deskLoading = false;
   let flames = [];        // {obj, seed, base} — candle sprites that flicker
   let chandLight = null;
   let roseGroup = null;
@@ -1209,6 +1214,112 @@ import * as THREE from "./vendor/three.module.min.js";
     return g;
   }
 
+  /* ---------- desk books: the wishlist and the reading log, in the flesh ---------- */
+
+  function clearDeskBooks() {
+    if (deskRoot) {
+      scene.remove(deskRoot);
+      deskRoot.traverse((o) => {
+        if (o.isMesh && o.material.userData.own) {
+          if (o.material.map) o.material.map.dispose();
+          o.material.dispose();
+        }
+      });
+      deskRoot = null;
+    }
+    for (const rec of deskRecs) {
+      if (hovered === rec) setHover(null);
+      rec.dead = true;
+      rec.tex.dispose();
+      rec.mesh.material.dispose();
+    }
+    deskRecs.length = 0;
+  }
+
+  // lay real books flat on a desk: three piles, two layers each
+  const DESK_SLOTS = [[-0.3, 0.14], [0.3, 0.11], [-0.01, -0.19]];
+
+  function buildDeskBooks() {
+    if (presenting) return;   // never yank a book someone is holding up
+    clearDeskBooks();
+    if (!deskSpots.length) return;
+    deskRoot = new THREE.Group();
+    const qDesk = new THREE.Quaternion();
+    const qFlat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
+    const up = new THREE.Vector3(0, 1, 0);
+
+    for (const spot of deskSpots) {
+      qDesk.setFromAxisAngle(up, spot.rotY);
+      const isWish = spot.kind === "wishlist";
+      const items = isWish ? deskData.wishlist : deskData.reads;
+
+      // a brass plate on the desk edge names the pile (and counts it)
+      const tex = plaqueTexture(isWish ? "wishlist" : "reading log", items.length || null);
+      const mat = new THREE.MeshBasicMaterial({ map: tex });
+      mat.userData.own = true;
+      const plate = new THREE.Mesh(new THREE.PlaneGeometry(0.26, 0.065), mat);
+      const plateLocal = new THREE.Vector3(0, 0.766, 0.245);
+      plate.position.copy(plateLocal.applyQuaternion(qDesk).add(spot.pos));
+      plate.quaternion.copy(qDesk).multiply(qFlat);
+      deskRoot.add(plate);
+
+      items.slice(0, DESK_SLOTS.length * 2).forEach((item, i) => {
+        const b = {
+          id: item.id || item.work_id,
+          title: item.title,
+          authors: item.authors,
+          cover_url: item.cover_url,
+          page_count: item.page_count,
+        };
+        const rec = makeBook(b);
+        rec.kind = spot.kind;
+        rec.open = isWish ? () => openShelfBook(item) : () => openReadSheet(item);
+        const [sx, sz] = DESK_SLOTS[i % DESK_SLOTS.length];
+        const layer = Math.floor(i / DESK_SLOTS.length);
+        const s = sizeOf(b);
+        const local = new THREE.Vector3(
+          sx + jitter(b, "dx") * 0.015,
+          0.76 + s.th / 2 + layer * (s.th + 0.004),
+          sz + jitter(b, "dz") * 0.015,
+        );
+        const pos = local.applyQuaternion(qDesk).add(spot.pos);
+        const quat = qDesk.clone()
+          .multiply(new THREE.Quaternion().setFromAxisAngle(up, jitter(b, "r") * 0.22))
+          .multiply(qFlat);
+        snapTo(rec, { pos, quat, out: up.clone().multiplyScalar(0.9) });
+        deskRecs.push(rec);
+        deskRoot.add(rec.mesh);
+      });
+    }
+    scene.add(deskRoot);
+    shadowDirty = true;
+  }
+
+  // fetch the real wishlist + reading log and reseat the desks when changed
+  async function refreshDeskBooks() {
+    if (!renderer || deskLoading) return;
+    deskLoading = true;
+    try {
+      const [wl, rd] = await Promise.all([
+        api(`/api/books?status=wishlist${shelfLibraryScope()}`),
+        api("/api/reads"),
+      ]);
+      const wishlist = (wl.items || [])
+        .sort((a, b) => (b.added_at || "").localeCompare(a.added_at || ""));
+      const rank = { reading: 0, read: 1, want_to_read: 2 };
+      const reads = (rd.items || []).sort((a, b) =>
+        (rank[a.status] ?? 3) - (rank[b.status] ?? 3) ||
+        (b.finished_at || b.started_at || "").localeCompare(a.finished_at || a.started_at || ""));
+      const sig = wishlist.map((b) => `${b.id}:${b.added_at}`).join("|") + "//" +
+        reads.map((r) => `${r.work_id}:${r.status}:${r.rating || ""}:${r.finished_at || ""}`).join("|");
+      if (sig !== deskData.sig) {
+        deskData = { wishlist, reads, sig };
+        buildDeskBooks();
+      }
+    } catch { /* the desks stay decorative if the fetch fails */ }
+    deskLoading = false;
+  }
+
   // the shell (floor, walls, upper stacks, dome, windows, chandelier, rose)
   // is sized to the bookcase ring and rebuilt only when a regroup
   // meaningfully changes the arc radius
@@ -1398,17 +1509,23 @@ import * as THREE from "./vendor/three.module.min.js";
     roomRoot.add(roseGroup);
     colliders.push({ x: 0, z: wallR - 1.7, r: 0.72 });
 
-    // reading desks scattered around the hall, facing the stacks
+    // reading desks scattered around the hall, facing the stacks. The
+    // first desk keeps the wishlist, the last keeps the reading log —
+    // their books are real data, placed by buildDeskBooks()
     const deskAngles = wallR > 6.5 ? [-1.55, -0.85, 0.85, 1.55] : [-1.05, 1.05];
     const deskR = Math.max(1.6, radius - 1.7);
-    for (const da of deskAngles) {
+    deskSpots = [];
+    deskAngles.forEach((da, i) => {
       const dx = Math.sin(da) * deskR, dz = -Math.cos(da) * deskR;
       const desk = buildDesk();
       desk.position.set(dx, 0, dz);
       desk.rotation.y = -da + Math.PI;   // chair side toward the room's heart
       roomRoot.add(desk);
       colliders.push({ x: dx, z: dz, r: 0.78 });
-    }
+      const kind = i === 0 ? "wishlist" : (i === deskAngles.length - 1 ? "reading" : null);
+      if (kind) deskSpots.push({ pos: new THREE.Vector3(dx, 0, dz), rotY: -da + Math.PI, kind });
+    });
+    buildDeskBooks();   // re-seat cached wishlist/reading books on the fresh desks
 
     scene.add(roomRoot);
     shadowDirty = true;
@@ -1946,6 +2063,7 @@ import * as THREE from "./vendor/three.module.min.js";
     raycaster.far = 6;
     const meshes = [];
     for (const rec of bookNodes.values()) meshes.push(rec.mesh);
+    for (const rec of deskRecs) if (!rec.dead) meshes.push(rec.mesh);
     const hit = raycaster.intersectObjects(meshes, false)[0];
     return hit ? hit.object.userData.rec : null;
   }
@@ -1961,7 +2079,8 @@ import * as THREE from "./vendor/three.module.min.js";
     hovered = rec;
     if (focusEl) {
       if (rec) {
-        focusEl.textContent = `${(rec.b.title || "untitled").toLowerCase()} — ${authorsOf(rec.b).toLowerCase()}`;
+        const where = rec.kind === "wishlist" ? " · wishlist" : rec.kind === "reading" ? " · reading log" : "";
+        focusEl.textContent = `${(rec.b.title || "untitled").toLowerCase()} — ${authorsOf(rec.b).toLowerCase()}${where}`;
         focusEl.classList.add("on");
       } else {
         focusEl.classList.remove("on");
@@ -2005,7 +2124,8 @@ import * as THREE from "./vendor/three.module.min.js";
       onComplete: () => {
         rec.floating = true;            // it hangs here until the sheet closes
         document.exitPointerLock?.();   // hand the cursor back for the sheet
-        openShelfBook(rec.b);
+        if (rec.open) rec.open();       // desk books route to their own editors
+        else openShelfBook(rec.b);
       },
     });
   }
@@ -2123,6 +2243,9 @@ import * as THREE from "./vendor/three.module.min.js";
         presenting = null;
         rec.floating = false;
         if (!rec.dead && rec.home) flyTo(rec, rec.home, 0.05);
+        // whatever was edited may have moved between shelf, wishlist and
+        // reading log — reseat the desks with fresh data
+        gsap.delayedCall(1.2, () => { if (viewVisible()) refreshDeskBooks(); });
       }
     }).observe(sheetEl, { attributes: true, attributeFilter: ["class"] });
 
@@ -2167,6 +2290,7 @@ import * as THREE from "./vendor/three.module.min.js";
   async function enter() {
     setRunning(true);
     resize();
+    refreshDeskBooks();                            // the desks track live data too
     if (loading) { pendingEnter = true; return; }  // re-run with the latest scope after
     const first = !books;
     if (first) countEl.textContent = "unlocking the library…";
