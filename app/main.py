@@ -84,6 +84,8 @@ class AddBookBody(BaseModel):
     format: str | None = None
     notes: str | None = None
     library_id: str | None = None  # defaults to the user's first library
+    new_edition: bool = False      # add as a sibling edition of the same work
+                                   # (a different format whose isbn we don't know)
 
 
 class UpdateBookBody(BaseModel):
@@ -512,9 +514,41 @@ def api_search(q: str, auth: AuthContext = Depends(require_auth)):
 # books CRUD (library_books — a library's copy of an edition)
 # --------------------------------------------------------------------------
 
-def _resolve_edition(auth: AuthContext, meta: dict, fmt: str | None) -> dict:
-    """Find the catalog edition for this metadata, or create it."""
+def _resolve_edition(auth: AuthContext, meta: dict, fmt: str | None,
+                     force_new: bool = False) -> dict:
+    """Find the catalog edition for this metadata, or create it.
+
+    With force_new the metadata describes a DIFFERENT edition of the same
+    work (e.g. "I also own the hardback"): never match by the source
+    edition's isbn — reuse a same-format sibling of the work if one exists,
+    otherwise mint a fresh edition without the borrowed identifiers.
+    """
     store = get_store()
+    if force_new:
+        work = _resolve_work(auth, meta)
+        for e in store.editions_for_works(auth.token, [work["id"]]):
+            if fmt and (e.get("format") or "") == fmt:
+                return e
+        return store.insert_edition(auth.token, {
+            "id": new_id(),
+            "work_id": work["id"],
+            "isbn13": None,          # the other format's isbn is unknown —
+            "isbn10": None,          # inheriting this one would corrupt matching
+            "title": meta.get("title"),
+            "subtitle": meta.get("subtitle"),
+            "authors": ", ".join(meta.get("authors") or []),
+            "publisher": meta.get("publisher"),
+            "published_date": meta.get("published_date"),
+            "description": meta.get("description"),
+            "format": fmt,
+            "cover_url": meta.get("cover_url"),
+            "google_volume_id": None,
+            "ol_edition_key": None,
+            "page_count": meta.get("page_count"),
+            "language": meta.get("language"),
+            "genre": meta.get("genre"),
+            "added_at": now_iso(),
+        })
     if meta.get("isbn13"):
         edition = store.get_edition_by_isbn(auth.token, meta["isbn13"])
         if edition:
@@ -554,7 +588,9 @@ def api_add_book(body: AddBookBody, auth: AuthContext = Depends(require_auth)):
     store = get_store()
     library_id = _target_library(auth, body.library_id)
 
-    edition = _resolve_edition(auth, meta, body.format)
+    if body.new_edition and not body.format:
+        raise HTTPException(400, "pick a format for the new edition")
+    edition = _resolve_edition(auth, meta, body.format, force_new=body.new_edition)
     existing = store.find_library_book(auth.token, library_id, edition["id"])
     if existing:
         fields = {"status": body.status, "status_changed_at": now_iso()}
