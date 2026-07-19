@@ -698,6 +698,15 @@ async function openEditionSheet(bookId) {
     <div class="sheet-actions">
       ${statusSwitcher(book.status)}
       <label class="field"><span>edition format</span>${formatSelect("edit-format", book.format)}</label>
+      <label class="field"><span>category (the shelves group by this)</span>
+        <input id="edit-genre" list="genre-suggestions" autocapitalize="none"
+          placeholder="e.g. fantasy, mystery — blank = uncategorized" value="${esc(book.genre || "")}">
+        <datalist id="genre-suggestions">
+          ${["fantasy", "science fiction", "mystery", "thriller", "horror", "romance",
+             "literary fiction", "historical fiction", "fairy tale", "classics", "poetry",
+             "young adult", "children's", "graphic novel", "nonfiction", "biography",
+             "memoir", "history", "science", "self-help"].map((g) => `<option value="${g}">`).join("")}
+        </datalist></label>
       <label class="field"><span>copies of this exact edition</span>
         <div class="copies-row">
           <button class="btn secondary" id="copies-minus">−</button>
@@ -732,6 +741,7 @@ async function openEditionSheet(bookId) {
   $("#edit-save").addEventListener("click", async () => {
     await patchBook(book.id, {
       format: $("#edit-format").value || null,
+      genre: $("#edit-genre").value.trim().toLowerCase(),
       notes: $("#edit-notes").value,
       copies,
     }, "saved ✓");
@@ -879,6 +889,18 @@ async function patchBook(id, fields, okMsg) {
 }
 
 /* ---------- search ---------- */
+
+// the × in the search box: visible only while there's something to clear,
+// wipes both the query and the results
+const searchClearBtn = $("#search-clear");
+$("#search-input").addEventListener("input", () =>
+  searchClearBtn.classList.toggle("show", !!$("#search-input").value));
+searchClearBtn.addEventListener("click", () => {
+  $("#search-input").value = "";
+  searchClearBtn.classList.remove("show");
+  $("#search-results").innerHTML = "";
+  $("#search-input").focus();
+});
 
 $("#search-form").addEventListener("submit", async (e) => {
   e.preventDefault();

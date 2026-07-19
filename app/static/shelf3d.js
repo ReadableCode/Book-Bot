@@ -131,13 +131,18 @@ import * as THREE from "./vendor/three.module.min.js";
       let key;
       if (mode === "genre") key = (b.genre || "").trim().toLowerCase() || "uncategorized";
       else if (mode === "format") key = b.format || "unknown";
+      else if (mode === "read") key = b._read === "read" ? "read" : "unread";
       else key = authorsOf(b).split(",")[0].trim() || "unknown author";
       if (!map.has(key)) map.set(key, []);
       map.get(key).push(b);
     }
     const groups = [...map.entries()].map(([key, items]) => ({ key, items }));
 
-    if (mode === "genre") {
+    if (mode === "read") {
+      // read shelf first, then everything still waiting — authors a–z inside
+      groups.forEach((g) => g.items.sort(byAuthorTitle));
+      groups.sort((a, b) => (a.key === "read" ? 0 : 1) - (b.key === "read" ? 0 : 1));
+    } else if (mode === "genre") {
       groups.forEach((g) => g.items.sort(byAuthorTitle));
       groups.sort((a, b) => {
         const ua = a.key === "uncategorized", ub = b.key === "uncategorized";
@@ -847,7 +852,6 @@ import * as THREE from "./vendor/three.module.min.js";
   let deskRoot = null;                           // the data-backed books on the desks
   const deskRecs = [];                           // book records living on desks
   let deskData = { wishlist: [], reads: [], sig: null };
-  let deskLoading = false;
   let flames = [];        // {obj, seed, base} — candle sprites that flicker
   let chandLight = null;
   let roseGroup = null;
@@ -1283,6 +1287,12 @@ import * as THREE from "./vendor/three.module.min.js";
         const rec = makeBook(b);
         rec.kind = spot.kind;
         rec.open = isWish ? () => openShelfBook(item) : () => openReadSheet(item);
+        if (isWish) {
+          // wished-for books aren't really here yet — ghost them
+          rec.mesh.material.transparent = true;
+          rec.mesh.material.opacity = 0.55;
+          rec.mesh.castShadow = false;
+        }
         const [sx, sz] = DESK_SLOTS[i % DESK_SLOTS.length];
         const layer = Math.floor(i / DESK_SLOTS.length);
         const s = sizeOf(b);
@@ -1304,29 +1314,13 @@ import * as THREE from "./vendor/three.module.min.js";
     shadowDirty = true;
   }
 
-  // fetch the real wishlist + reading log and reseat the desks when changed
-  async function refreshDeskBooks() {
-    if (!renderer || deskLoading) return;
-    deskLoading = true;
-    try {
-      const [wl, rd] = await Promise.all([
-        api(`/api/books?status=wishlist${shelfLibraryScope()}`),
-        api("/api/reads"),
-      ]);
-      const wishlist = (wl.items || [])
-        .sort((a, b) => (b.added_at || "").localeCompare(a.added_at || ""));
-      const rank = { reading: 0, read: 1, want_to_read: 2 };
-      const reads = (rd.items || []).sort((a, b) =>
-        (rank[a.status] ?? 3) - (rank[b.status] ?? 3) ||
-        (b.finished_at || b.started_at || "").localeCompare(a.finished_at || a.started_at || ""));
-      const sig = wishlist.map((b) => `${b.id}:${b.added_at}`).join("|") + "//" +
-        reads.map((r) => `${r.work_id}:${r.status}:${r.rating || ""}:${r.finished_at || ""}`).join("|");
-      if (sig !== deskData.sig) {
-        deskData = { wishlist, reads, sig };
-        buildDeskBooks();
-      }
-    } catch { /* the desks stay decorative if the fetch fails */ }
-    deskLoading = false;
+  // seat fresh wishlist + reading data on the desks when it changed
+  function seatDesks(wishlist, reads) {
+    const sig = wishlist.map((b) => `${b.id}:${b.added_at}`).join("|") + "//" +
+      reads.map((r) => `${r.work_id}:${r.status}:${r.rating || ""}:${r.finished_at || ""}`).join("|");
+    if (sig === deskData.sig) return;
+    deskData = { wishlist, reads, sig };
+    buildDeskBooks();
   }
 
   // the shell (floor, walls, upper stacks, dome, windows, chandelier, rose)
@@ -1518,23 +1512,27 @@ import * as THREE from "./vendor/three.module.min.js";
     roomRoot.add(roseGroup);
     colliders.push({ x: 0, z: wallR - 1.7, r: 0.72 });
 
-    // reading desks scattered around the hall, facing the stacks. The
-    // first desk keeps the wishlist, the last keeps the reading log —
-    // their books are real data, placed by buildDeskBooks()
-    const deskAngles = wallR > 6.5 ? [-1.55, -0.85, 0.85, 1.55] : [-1.05, 1.05];
-    const deskR = Math.max(1.6, radius - 1.7);
+    // the wishlist and reading-log desks keep the rose company — one to
+    // each side of the alcove — chairs angled toward the room's heart.
+    // Their books are real data, placed by buildDeskBooks().
     deskSpots = [];
     ledgerPads = [];
-    deskAngles.forEach((da, i) => {
-      const dx = Math.sin(da) * deskR, dz = -Math.cos(da) * deskR;
-      const kind = i === 0 ? "wishlist" : (i === deskAngles.length - 1 ? "reading" : null);
+    const placeDesk = (a, r, kind) => {
+      const dx = Math.sin(a) * r, dz = -Math.cos(a) * r;
       const desk = buildDesk(kind);
       desk.position.set(dx, 0, dz);
-      desk.rotation.y = -da + Math.PI;   // chair side toward the room's heart
+      desk.rotation.y = -a + Math.PI;
       roomRoot.add(desk);
       colliders.push({ x: dx, z: dz, r: 0.78 });
-      if (kind) deskSpots.push({ pos: new THREE.Vector3(dx, 0, dz), rotY: -da + Math.PI, kind });
-    });
+      if (kind) deskSpots.push({ pos: new THREE.Vector3(dx, 0, dz), rotY: -a + Math.PI, kind });
+    };
+    placeDesk(Math.PI - 0.52, wallR - 1.85, "wishlist");
+    placeDesk(Math.PI + 0.52, wallR - 1.85, "reading");
+    // grand halls keep a pair of plain study desks out by the stacks
+    if (wallR > 6.5) {
+      placeDesk(-1.05, Math.max(1.6, radius - 1.7), null);
+      placeDesk(1.05, Math.max(1.6, radius - 1.7), null);
+    }
     buildDeskBooks();   // re-seat cached wishlist/reading books on the fresh desks
 
     scene.add(roomRoot);
@@ -1870,8 +1868,13 @@ import * as THREE from "./vendor/three.module.min.js";
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.anisotropy = 4;
     const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.75, metalness: 0.02 });
+    if (b.ghost) {
+      // not really here: a book you've read but don't own casts no shadow
+      mat.transparent = true;
+      mat.opacity = 0.55;
+    }
     const mesh = new THREE.Mesh(sharedGeo, mat);
-    mesh.castShadow = true;
+    mesh.castShadow = !b.ghost;
     mesh.receiveShadow = true;
     const s = sizeOf(b);
     mesh.scale.set(s.w, s.h, s.th);
@@ -1967,7 +1970,10 @@ import * as THREE from "./vendor/three.module.min.js";
     rec.mesh.quaternion.copy(pl.quat);
     rec.mesh.material.transparent = true;
     rec.mesh.material.opacity = 0;
-    gsap.to(rec.mesh.material, { opacity: 1, duration: 0.4, delay, onComplete: () => { rec.mesh.material.transparent = false; } });
+    gsap.to(rec.mesh.material, {
+      opacity: rec.b.ghost ? 0.55 : 1, duration: 0.4, delay,
+      onComplete: () => { if (!rec.b.ghost) rec.mesh.material.transparent = false; },
+    });
     flyTo(rec, pl, delay);
   }
 
@@ -2000,6 +2006,9 @@ import * as THREE from "./vendor/three.module.min.js";
       const pl = layout.placements.get(b.id);
       if (!pl) continue;
       let rec = bookNodes.get(b.id);
+      if (rec) {
+        rec.b = b;   // annotations (read state, genre) may have changed
+      }
       if (!rec) {
         rec = makeBook(b);
         bookNodes.set(b.id, rec);
@@ -2018,6 +2027,8 @@ import * as THREE from "./vendor/three.module.min.js";
       } else {
         snapTo(rec, pl);
       }
+      // a trophy's editor is its reading entry, not a (nonexistent) holding
+      rec.open = b._readItem ? () => openReadSheet(b._readItem) : null;
       i++;
     }
     for (const [id, rec] of [...bookNodes]) {
@@ -2095,7 +2106,9 @@ import * as THREE from "./vendor/three.module.min.js";
             ? "the wishlist ledger — browse & add books"
             : "the reading log — browse & add books";
         } else {
-          const where = rec.kind === "wishlist" ? " · wishlist" : rec.kind === "reading" ? " · reading log" : "";
+          const where = rec.kind === "wishlist" ? " · wishlist"
+            : rec.kind === "reading" ? " · reading log"
+            : rec.b.ghost ? " · trophy — read, not owned" : "";
           focusEl.textContent = `${(rec.b.title || "untitled").toLowerCase()} — ${authorsOf(rec.b).toLowerCase()}${where}`;
         }
         focusEl.classList.add("on");
@@ -2274,9 +2287,11 @@ import * as THREE from "./vendor/three.module.min.js";
         rec.floating = false;
         if (!rec.dead && rec.home) flyTo(rec, rec.home, 0.05);
       }
-      // whatever was edited (or added via a ledger) may have moved between
-      // shelf, wishlist and reading log — reseat the desks with fresh data
-      gsap.delayedCall(1.2, () => { if (viewVisible()) refreshDeskBooks(); });
+      // whatever was edited (or added via a ledger) may have changed
+      // category, moved between shelf, wishlist and reading log, or been
+      // removed — re-enter refetches everything and regroups the hall
+      // (books fly to their new shelves) plus reseats the desks
+      gsap.delayedCall(1.2, () => { if (viewVisible()) enter(); });
     }).observe(sheetEl, { attributes: true, attributeFilter: ["class"] });
 
     // pause when the tab or the view goes away
@@ -2290,7 +2305,7 @@ import * as THREE from "./vendor/three.module.min.js";
   /* ---------- data plumbing (same flow as the DOM fallback) ---------- */
 
   const sigOf = (list) =>
-    list.map((b) => `${b.id}:${b.genre ?? ""}:${b.format ?? ""}`).sort().join("|");
+    list.map((b) => `${b.id}:${b.genre ?? ""}:${b.format ?? ""}:${b._read ?? ""}`).sort().join("|");
 
   async function enrichGenres() {
     if (enriching || enrichDone || !books || !books.length) return;
@@ -2316,19 +2331,22 @@ import * as THREE from "./vendor/three.module.min.js";
   }
 
   let pendingEnter = false;
+  let wishSyncing = false;
 
   async function enter() {
     setRunning(true);
     resize();
-    refreshDeskBooks();                            // the desks track live data too
     if (loading) { pendingEnter = true; return; }  // re-run with the latest scope after
     const first = !books;
     if (first) countEl.textContent = "unlocking the library…";
     loading = true;
-    let fresh;
+    let lib, wl, rd;
     try {
-      const data = await api(`/api/books?status=library${shelfLibraryScope()}`);
-      fresh = data.items || [];
+      [lib, wl, rd] = await Promise.all([
+        api(`/api/books?status=library${shelfLibraryScope()}`),
+        api(`/api/books?status=wishlist${shelfLibraryScope()}`),
+        api("/api/reads"),
+      ]);
     } catch (err) {
       loading = false;
       if (first) countEl.textContent = `couldn't load the library — ${err.message}`;
@@ -2337,12 +2355,69 @@ import * as THREE from "./vendor/three.module.min.js";
     }
     loading = false;
     if (pendingEnter) { pendingEnter = false; enter(); return; }  // scope changed mid-fetch
+
+    const sample = typeof isSampleLibrary === "function" && typeof activeLibrary === "function"
+      && isSampleLibrary(activeLibrary());
+    const items = lib.items || [];
+    const wishlist = (wl.items || [])
+      .sort((a, b) => (b.added_at || "").localeCompare(a.added_at || ""));
+    const rank = { reading: 0, read: 1, want_to_read: 2 };
+    const reads = (rd.items || []).sort((a, b) =>
+      (rank[a.status] ?? 3) - (rank[b.status] ?? 3) ||
+      (b.finished_at || b.started_at || "").localeCompare(a.finished_at || a.started_at || ""));
+
+    // annotate shelved books with my read state (the "read" sort keys on it)
+    const readByWork = new Map(reads.map((r) => [String(r.work_id), r.status]));
+    for (const b of items) b._read = readByWork.get(String(b.work_id)) || "";
+
+    // trophies — read, but no physical copy — haunt the shelves as ghosts
+    const trophies = sample ? [] : reads
+      .filter((r) => r.status === "read" && !r.owned_physical)
+      .map((r) => ({
+        id: `trophy-${r.work_id}`,
+        title: r.title,
+        authors: r.authors,
+        cover_url: r.cover_url,
+        ghost: true,
+        _read: "read",
+        _readItem: r,
+      }));
+
+    const fresh = [...items, ...trophies];
     if (first || sigOf(fresh) !== sigOf(books)) {
       books = fresh;
       regroup(!first);
     } else {
       books = fresh;
     }
+
+    seatDesks(wishlist, reads);
+
+    // every trophy belongs on the wishlist too — file the missing ones
+    if (!sample && !wishSyncing) {
+      const wished = new Set(wishlist.map((w) => String(w.work_id)));
+      const missing = trophies.filter((t) => !wished.has(String(t._readItem.work_id)));
+      if (missing.length) {
+        wishSyncing = true;
+        Promise.all(missing.map((t) => api("/api/books", {
+          method: "POST",
+          body: JSON.stringify({
+            status: "wishlist",
+            metadata: {
+              title: t.title,
+              authors: (t.authors || "").split(",").map((s) => s.trim()).filter(Boolean),
+              cover_url: t.cover_url,
+            },
+            library_id: typeof targetLibraryId === "function" ? targetLibraryId() : null,
+          }),
+        }).catch(() => { /* one failed filing shouldn't block the rest */ })))
+          .then(() => {
+            wishSyncing = false;
+            if (viewVisible()) enter();   // one bounded pass to reseat the desk
+          });
+      }
+    }
+
     enrichGenres();
   }
 
@@ -2366,6 +2441,8 @@ import * as THREE from "./vendor/three.module.min.js";
     if (renderer) { try { renderer.dispose(); } catch { /* ignore */ } renderer = null; }
     worldEl.classList.add("hidden");
     caseEl.classList.remove("hidden");
+    // the DOM bookcase doesn't know the read/unread grouping
+    document.querySelector('#shelf-mode .seg-btn[data-mode="read"]')?.classList.add("hidden");
     impl = window.ShelfDOM;
   }
 

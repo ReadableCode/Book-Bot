@@ -78,7 +78,10 @@
       <section id="view-search" class="view hidden">
         <h2><span class="slashes">//</span> search title, author, or barcode</h2>
         <form id="search-form" class="row-form">
-          <input id="search-input" placeholder="e.g. way of kings — or an isbn/upc, even partial" autocapitalize="none">
+          <div class="input-clear-wrap">
+            <input id="search-input" placeholder="e.g. way of kings — or an isbn/upc, even partial" autocapitalize="none">
+            <button type="button" id="search-clear" class="input-clear" aria-label="clear search" title="clear">×</button>
+          </div>
           <button class="btn primary" type="submit">search</button>
         </form>
         <div id="search-results"></div>
@@ -109,6 +112,7 @@
             <button data-mode="genre" class="seg-btn active" role="tab" aria-selected="true">genre</button>
             <button data-mode="format" class="seg-btn" role="tab" aria-selected="false">type</button>
             <button data-mode="author" class="seg-btn" role="tab" aria-selected="false">author</button>
+            <button data-mode="read" class="seg-btn" role="tab" aria-selected="false">read</button>
           </div>
         </div>
         <div id="world3d" class="world3d hidden">
