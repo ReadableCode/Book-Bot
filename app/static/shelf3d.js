@@ -1518,23 +1518,27 @@ import * as THREE from "./vendor/three.module.min.js";
     roomRoot.add(roseGroup);
     colliders.push({ x: 0, z: wallR - 1.7, r: 0.72 });
 
-    // reading desks scattered around the hall, facing the stacks. The
-    // first desk keeps the wishlist, the last keeps the reading log —
-    // their books are real data, placed by buildDeskBooks()
-    const deskAngles = wallR > 6.5 ? [-1.55, -0.85, 0.85, 1.55] : [-1.05, 1.05];
-    const deskR = Math.max(1.6, radius - 1.7);
+    // the wishlist and reading-log desks keep the rose company — one to
+    // each side of the alcove — chairs angled toward the room's heart.
+    // Their books are real data, placed by buildDeskBooks().
     deskSpots = [];
     ledgerPads = [];
-    deskAngles.forEach((da, i) => {
-      const dx = Math.sin(da) * deskR, dz = -Math.cos(da) * deskR;
-      const kind = i === 0 ? "wishlist" : (i === deskAngles.length - 1 ? "reading" : null);
+    const placeDesk = (a, r, kind) => {
+      const dx = Math.sin(a) * r, dz = -Math.cos(a) * r;
       const desk = buildDesk(kind);
       desk.position.set(dx, 0, dz);
-      desk.rotation.y = -da + Math.PI;   // chair side toward the room's heart
+      desk.rotation.y = -a + Math.PI;
       roomRoot.add(desk);
       colliders.push({ x: dx, z: dz, r: 0.78 });
-      if (kind) deskSpots.push({ pos: new THREE.Vector3(dx, 0, dz), rotY: -da + Math.PI, kind });
-    });
+      if (kind) deskSpots.push({ pos: new THREE.Vector3(dx, 0, dz), rotY: -a + Math.PI, kind });
+    };
+    placeDesk(Math.PI - 0.52, wallR - 1.85, "wishlist");
+    placeDesk(Math.PI + 0.52, wallR - 1.85, "reading");
+    // grand halls keep a pair of plain study desks out by the stacks
+    if (wallR > 6.5) {
+      placeDesk(-1.05, Math.max(1.6, radius - 1.7), null);
+      placeDesk(1.05, Math.max(1.6, radius - 1.7), null);
+    }
     buildDeskBooks();   // re-seat cached wishlist/reading books on the fresh desks
 
     scene.add(roomRoot);
@@ -2274,9 +2278,11 @@ import * as THREE from "./vendor/three.module.min.js";
         rec.floating = false;
         if (!rec.dead && rec.home) flyTo(rec, rec.home, 0.05);
       }
-      // whatever was edited (or added via a ledger) may have moved between
-      // shelf, wishlist and reading log — reseat the desks with fresh data
-      gsap.delayedCall(1.2, () => { if (viewVisible()) refreshDeskBooks(); });
+      // whatever was edited (or added via a ledger) may have changed
+      // category, moved between shelf, wishlist and reading log, or been
+      // removed — re-enter refetches everything and regroups the hall
+      // (books fly to their new shelves) plus reseats the desks
+      gsap.delayedCall(1.2, () => { if (viewVisible()) enter(); });
     }).observe(sheetEl, { attributes: true, attributeFilter: ["class"] });
 
     // pause when the tab or the view goes away
