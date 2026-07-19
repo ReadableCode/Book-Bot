@@ -753,6 +753,102 @@ async function openEditionSheet(bookId) {
   });
 }
 
+/* browse-and-add sheet for the desk ledgers in the 3D library: the whole
+   wishlist / reading log as a list, with an inline search to add to it */
+async function openDeskListSheet(kind) {
+  const isWish = kind === "wishlist";
+  openSheet(`
+    <div class="result-group-label"><span class="slashes">//</span> ${isWish ? "the wishlist" : "the reading log"}</div>
+    <form id="ledger-add-form" class="row-form">
+      <input id="ledger-add-input" placeholder="${isWish ? "add a book — title, author, or isbn" : "log a book — title, author, or isbn"}" autocapitalize="none">
+      <button class="btn primary" type="submit">search</button>
+    </form>
+    <div id="ledger-add-results"></div>
+    <div class="result-group-label"><span class="slashes">//</span> on the list</div>
+    <div id="ledger-items" class="book-list"><div class="empty">loading…</div></div>
+  `);
+
+  async function renderItems() {
+    const itemsBox = $("#ledger-items");
+    if (!itemsBox) return;   // the sheet moved on
+    try {
+      const items = isWish
+        ? (await api(`/api/books?status=wishlist${shelfLibraryScope()}`)).items || []
+        : (await api("/api/reads")).items || [];
+      if (!items.length) {
+        itemsBox.innerHTML = `<div class="empty">${isWish
+          ? "nothing wished for yet — search above to add the first"
+          : "no reading history yet — search above to log the first"}</div>`;
+        return;
+      }
+      itemsBox.innerHTML = items.map((it, i) => `
+        <div class="book-card" data-idx="${i}">
+          ${coverImg(it.cover_url)}
+          <div class="meta">
+            <div class="title">${esc(it.title || "")}</div>
+            <div class="authors">${esc(it.authors || "")}</div>
+            <div class="chips">${isWish
+              ? `<span class="chip warn">✩ wishlist</span>${it.format ? `<span class="chip">${esc(it.format)}</span>` : ""}`
+              : `${readChip(it.status)}${it.rating ? `<span class="chip">${"★".repeat(it.rating)}</span>` : ""}`}</div>
+          </div>
+        </div>`).join("");
+      itemsBox.querySelectorAll(".book-card").forEach((card) =>
+        card.addEventListener("click", () => {
+          const it = items[Number(card.dataset.idx)];
+          if (isWish) openShelfBook(it); else openReadSheet(it);
+        }));
+    } catch (err) { itemsBox.innerHTML = `<div class="empty">${esc(err.message)}</div>`; }
+  }
+  renderItems();
+
+  $("#ledger-add-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const q = $("#ledger-add-input").value.trim();
+    if (!q) return;
+    const box = $("#ledger-add-results");
+    box.innerHTML = `<div class="empty">searching…</div>`;
+    try {
+      const data = await api(`/api/search?q=${encodeURIComponent(q)}`);
+      const results = (data.external || []).slice(0, 6);
+      if (!results.length) { box.innerHTML = `<div class="empty">no results — try another spelling</div>`; return; }
+      box.innerHTML = results.map((m, i) => `
+        <div class="book-card" data-i="${i}">
+          ${coverImg(m.cover_url)}
+          <div class="meta">
+            <div class="title">${esc(m.title || "")}</div>
+            <div class="authors">${esc(Array.isArray(m.authors) ? m.authors.join(", ") : m.authors || "")}</div>
+            <div class="chips"><span class="chip ok">${isWish ? "＋ tap to wish for it" : "＋ tap to log it"}</span>
+              ${m.published_date ? `<span class="chip">${esc(m.published_date)}</span>` : ""}</div>
+          </div>
+        </div>`).join("");
+      box.querySelectorAll(".book-card").forEach((card) => card.addEventListener("click", async () => {
+        const m = results[Number(card.dataset.i)];
+        try {
+          if (isWish) {
+            await api("/api/books", {
+              method: "POST",
+              body: JSON.stringify({ status: "wishlist", metadata: m, format: m.format || null, library_id: targetLibraryId() }),
+            });
+            toast(`${m.title} — wished for ✓`, "ok");
+          } else {
+            await api("/api/reads", {
+              method: "POST",
+              body: JSON.stringify({ metadata: m, status: "want_to_read" }),
+            });
+            toast(`${m.title} — on the reading log ✓`, "ok");
+          }
+          box.innerHTML = "";
+          $("#ledger-add-input").value = "";
+          refreshStats();
+          invalidateBooks();
+          readCache = null;
+          renderItems();
+        } catch (err) { toast(err.message, "err"); }
+      }));
+    } catch (err) { box.innerHTML = `<div class="empty">${esc(err.message)}</div>`; }
+  });
+}
+
 function bindDelete(btn, bookId) {
   btn.addEventListener("click", async () => {
     if (!btn.dataset.armed) {

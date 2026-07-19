@@ -743,8 +743,7 @@ import * as THREE from "./vendor/three.module.min.js";
         el.requestPointerLock?.();
         return;
       }
-      const rec = pick(null);   // whatever the crosshair rests on
-      if (rec) present(rec);
+      activate(pick(null));   // whatever the crosshair rests on
     });
 
     document.addEventListener("pointerlockchange", () => {
@@ -825,16 +824,12 @@ import * as THREE from "./vendor/three.module.min.js";
         if (stickNub) stickNub.style.transform = "";
         if (quick) {
           // a motionless dab on the left half is a tap, not a walk
-          const rec = pick(e);
-          if (rec) present(rec);
+          activate(pick(e));
         }
       } else if (e.pointerId === look.id) {
         const quick = performance.now() - look.t0 < 350 && look.moved < 12;
         look.id = null;
-        if (quick) {
-          const rec = pick(e);
-          if (rec) present(rec);
-        }
+        if (quick) activate(pick(e));
       }
     };
     el.addEventListener("pointerup", touchUp);
@@ -848,6 +843,7 @@ import * as THREE from "./vendor/three.module.min.js";
   let roomRoot = null;
   let roomWallR = 0;
   let deskSpots = [];                            // {pos, rotY, kind} per labeled desk
+  let ledgerPads = [];                           // pick targets over the open ledgers
   let deskRoot = null;                           // the data-backed books on the desks
   const deskRecs = [];                           // book records living on desks
   let deskData = { wishlist: [], reads: [], sig: null };
@@ -1137,8 +1133,10 @@ import * as THREE from "./vendor/three.module.min.js";
     return g;
   }
 
-  // a reading desk: table, chair, an open book, a lit candlestick, a quill
-  function buildDesk() {
+  // a reading desk: table, chair, an open book, a lit candlestick, a quill.
+  // On a labeled desk the open ledger is itself a pick target: clicking it
+  // opens the browse-and-add sheet for the whole list.
+  function buildDesk(kind) {
     const g = new THREE.Group();
     const woodMat = new THREE.MeshStandardMaterial({ map: assets.wood, roughness: 0.7 });
     const dark = new THREE.MeshStandardMaterial({ color: 0x241708, roughness: 0.85 });
@@ -1184,6 +1182,17 @@ import * as THREE from "./vendor/three.module.min.js";
     const bspine = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.014, 0.22), spineMat);
     bspine.position.set(0, 0.768, 0.06);
     g.add(bspine);
+
+    if (kind) {
+      const pad = new THREE.Mesh(
+        new THREE.BoxGeometry(0.38, 0.06, 0.3),
+        new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }),
+      );
+      pad.position.set(0, 0.79, 0.06);
+      pad.userData.rec = { ledgerKind: kind };
+      g.add(pad);
+      ledgerPads.push(pad);
+    }
 
     // candlestick with a live flame
     const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.035, 0.09, 10), gold);
@@ -1515,14 +1524,15 @@ import * as THREE from "./vendor/three.module.min.js";
     const deskAngles = wallR > 6.5 ? [-1.55, -0.85, 0.85, 1.55] : [-1.05, 1.05];
     const deskR = Math.max(1.6, radius - 1.7);
     deskSpots = [];
+    ledgerPads = [];
     deskAngles.forEach((da, i) => {
       const dx = Math.sin(da) * deskR, dz = -Math.cos(da) * deskR;
-      const desk = buildDesk();
+      const kind = i === 0 ? "wishlist" : (i === deskAngles.length - 1 ? "reading" : null);
+      const desk = buildDesk(kind);
       desk.position.set(dx, 0, dz);
       desk.rotation.y = -da + Math.PI;   // chair side toward the room's heart
       roomRoot.add(desk);
       colliders.push({ x: dx, z: dz, r: 0.78 });
-      const kind = i === 0 ? "wishlist" : (i === deskAngles.length - 1 ? "reading" : null);
       if (kind) deskSpots.push({ pos: new THREE.Vector3(dx, 0, dz), rotY: -da + Math.PI, kind });
     });
     buildDeskBooks();   // re-seat cached wishlist/reading books on the fresh desks
@@ -2064,6 +2074,7 @@ import * as THREE from "./vendor/three.module.min.js";
     const meshes = [];
     for (const rec of bookNodes.values()) meshes.push(rec.mesh);
     for (const rec of deskRecs) if (!rec.dead) meshes.push(rec.mesh);
+    for (const pad of ledgerPads) meshes.push(pad);
     const hit = raycaster.intersectObjects(meshes, false)[0];
     return hit ? hit.object.userData.rec : null;
   }
@@ -2079,8 +2090,14 @@ import * as THREE from "./vendor/three.module.min.js";
     hovered = rec;
     if (focusEl) {
       if (rec) {
-        const where = rec.kind === "wishlist" ? " · wishlist" : rec.kind === "reading" ? " · reading log" : "";
-        focusEl.textContent = `${(rec.b.title || "untitled").toLowerCase()} — ${authorsOf(rec.b).toLowerCase()}${where}`;
+        if (rec.ledgerKind) {
+          focusEl.textContent = rec.ledgerKind === "wishlist"
+            ? "the wishlist ledger — browse & add books"
+            : "the reading log — browse & add books";
+        } else {
+          const where = rec.kind === "wishlist" ? " · wishlist" : rec.kind === "reading" ? " · reading log" : "";
+          focusEl.textContent = `${(rec.b.title || "untitled").toLowerCase()} — ${authorsOf(rec.b).toLowerCase()}${where}`;
+        }
         focusEl.classList.add("on");
       } else {
         focusEl.classList.remove("on");
@@ -2104,6 +2121,18 @@ import * as THREE from "./vendor/three.module.min.js";
     tmpV3.set(0, 1, 0).applyQuaternion(camera.quaternion);
     outP.multiplyScalar(0.5).add(camera.position).addScaledVector(tmpV3, 0.16);
     outQ.copy(camera.quaternion);
+  }
+
+  // route a click/tap: ledgers open their browse-and-add sheet, books are
+  // lifted down off the shelf
+  function activate(rec) {
+    if (!rec) return;
+    if (rec.ledgerKind) {
+      document.exitPointerLock?.();
+      openDeskListSheet(rec.ledgerKind);
+      return;
+    }
+    present(rec);
   }
 
   function present(rec) {
@@ -2238,15 +2267,16 @@ import * as THREE from "./vendor/three.module.min.js";
     // the held book flies home the moment the detail sheet closes
     const sheetEl = document.getElementById("sheet");
     new MutationObserver(() => {
-      if (presenting && sheetEl.classList.contains("hidden")) {
+      if (!sheetEl.classList.contains("hidden")) return;
+      if (presenting) {
         const rec = presenting;
         presenting = null;
         rec.floating = false;
         if (!rec.dead && rec.home) flyTo(rec, rec.home, 0.05);
-        // whatever was edited may have moved between shelf, wishlist and
-        // reading log — reseat the desks with fresh data
-        gsap.delayedCall(1.2, () => { if (viewVisible()) refreshDeskBooks(); });
       }
+      // whatever was edited (or added via a ledger) may have moved between
+      // shelf, wishlist and reading log — reseat the desks with fresh data
+      gsap.delayedCall(1.2, () => { if (viewVisible()) refreshDeskBooks(); });
     }).observe(sheetEl, { attributes: true, attributeFilter: ["class"] });
 
     // pause when the tab or the view goes away
