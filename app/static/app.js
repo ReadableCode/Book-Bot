@@ -880,6 +880,18 @@ async function patchBook(id, fields, okMsg) {
 
 /* ---------- search ---------- */
 
+// the × in the search box: visible only while there's something to clear,
+// wipes both the query and the results
+const searchClearBtn = $("#search-clear");
+$("#search-input").addEventListener("input", () =>
+  searchClearBtn.classList.toggle("show", !!$("#search-input").value));
+searchClearBtn.addEventListener("click", () => {
+  $("#search-input").value = "";
+  searchClearBtn.classList.remove("show");
+  $("#search-results").innerHTML = "";
+  $("#search-input").focus();
+});
+
 $("#search-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const q = $("#search-input").value.trim();

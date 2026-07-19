@@ -78,7 +78,10 @@
       <section id="view-search" class="view hidden">
         <h2><span class="slashes">//</span> search title, author, or barcode</h2>
         <form id="search-form" class="row-form">
-          <input id="search-input" placeholder="e.g. way of kings — or an isbn/upc, even partial" autocapitalize="none">
+          <div class="input-clear-wrap">
+            <input id="search-input" placeholder="e.g. way of kings — or an isbn/upc, even partial" autocapitalize="none">
+            <button type="button" id="search-clear" class="input-clear" aria-label="clear search" title="clear">×</button>
+          </div>
           <button class="btn primary" type="submit">search</button>
         </form>
         <div id="search-results"></div>
