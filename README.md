@@ -164,7 +164,4 @@ deploy/         one-time SQL + notes for the shared PostgREST stack
 scripts/        create_user.py, manage_library.py, import_scans.py,
                 seed_books.py
 tests/          pytest suite (API against a throwaway SQLite database)
-archive/        the previous generation of Book-Bot scripts (Open Library
-                dump loaders, ebook file renamer, ad-hoc queries) — kept
-                for reference, not used by the website
 ```
