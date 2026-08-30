@@ -26,8 +26,8 @@ from .store import HOLDING_STATUSES, READ_STATUSES, StoreError, get_store, new_i
 @asynccontextmanager
 async def _lifespan(app):
     # converge the database on every startup, however the app is run —
-    # local uvicorn or container alike (schema + sample library; both
-    # idempotent and best-effort, see app/bootstrap.py)
+    # local uvicorn or container alike (idempotent and best-effort, see
+    # app/bootstrap.py)
     bootstrap.run()
     yield
 
@@ -127,7 +127,7 @@ async def store_error_handler(request, exc: StoreError):
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "mode": config.MODE}
+    return {"status": "ok"}
 
 
 # --------------------------------------------------------------------------
@@ -197,8 +197,7 @@ class SignupBody(BaseModel):
 
 @app.post("/api/signup")
 def api_signup(body: SignupBody, request: Request):
-    """Create an account and give it an empty personal library. The
-    shared Sample Library is visible to every account for browsing."""
+    """Create an account and give it an empty personal library."""
     if not config.SIGNUP_ENABLED:
         raise HTTPException(403, "signups are disabled — ask for an invite")
     ip_key = f"ip:{client_ip(request)}"
@@ -211,7 +210,10 @@ def api_signup(body: SignupBody, request: Request):
     # every attempt counts: signup has no "failure" a caller shouldn't
     # control, so the limiter throttles account-creation churn per IP
     signup_limiter.record_failure(ip_key)
-    accounts.create_user(username, body.password)
+    try:
+        accounts.create_user(username, body.password)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
     token = login(username, body.password, client_ip=client_ip(request))
     _ensure_libraries(decode_token(token), username=username)
     return {"token": token}
@@ -230,11 +232,6 @@ def api_me(auth: AuthContext = Depends(require_auth)):
         if str(m["user_id"]) == str(auth.user_id):
             username = m["username"]
     out = [{**lib, "members": by_library.get(str(lib["id"]), [])} for lib in libraries]
-    # the shared Sample Library rides along read-only for everyone (last,
-    # so the user's own library stays the default selection)
-    sample = store.get_library(auth.token, config.SAMPLE_LIBRARY_ID)
-    if sample:
-        out.append({**sample, "role": "viewer", "members": []})
     return {"user_id": auth.user_id, "username": username, "libraries": out}
 
 
@@ -617,12 +614,7 @@ def api_list_books(status: str | None = None, q: str | None = None,
                    library_id: str | None = None, auth: AuthContext = Depends(require_auth)):
     if status is not None and status not in HOLDING_STATUSES:
         raise HTTPException(400, f"status must be one of {', '.join(HOLDING_STATUSES)}")
-    if library_id == config.SAMPLE_LIBRARY_ID:
-        # the shared Sample Library is browsable by everyone (view only —
-        # every write path resolves through _target_library, which knows
-        # nothing of it)
-        library_ids = [library_id]
-    elif library_id:
+    if library_id:
         library_ids = [_target_library(auth, library_id)]
     else:
         library_ids = _library_ids(auth)

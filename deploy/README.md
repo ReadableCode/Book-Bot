@@ -25,9 +25,10 @@ it runs as a container in the elitedesk stack at
   repo's `.env` → `personal_credentials/personal.env` on any machine with
   both repos cloned. On elitedesk that feeds the fragment's
   `${POSTGRES_USER}` / `${POSTGRES_PASSWORD}` / `${POSTGREST_JWT_SECRET}`
-  interpolation; on dev machines it supplies the JWT secret and superuser
-  creds for scripts while the app stays in SQLite dev mode (personal.env
-  sets no `POSTGREST_URL`).
+  interpolation; on dev machines it supplies the same `POSTGREST_URL`,
+  JWT secret and superuser creds. There is no dev mode: local
+  development points at the real deployment, which is what the rest of
+  the fleet does (conventions **I8**).
 
 ## schema setup is automatic
 
@@ -40,7 +41,7 @@ is present it checks `book_bot.deploy_meta` against
 `bootstrap.SCHEMA_VERSION` (one SELECT) and only on a mismatch — i.e.
 once per actual schema change, never per process start — creates the
 `book_bot_user` role, applies `02_schema.sql` + `03_secure_users.sql` +
-`04_user_libraries.sql` + `05_sample_library.sql`, stamps the new
+`04_user_libraries.sql` + `06_drop_sample_library.sql`, stamps the new
 version and reloads PostgREST's schema cache. (The SQL is idempotent
 but not free: it takes exclusive locks and the cache reload disrupts
 in-flight requests, so it must not run on every boot. Bump
@@ -82,9 +83,13 @@ Two operational notes:
 
 Book-bot fronts its own auth now, the same posture Sync_Plex ships:
 
-- **bcrypt password hashes**, checked by the postgrest-auth service in
-  prod (dev mode checks locally and pays the same bcrypt cost for
-  unknown usernames — no enumeration by timing).
+- **argon2id password hashes**, checked by the postgrest-auth service in
+  prod (legacy bcrypt hashes verify by prefix and get rehashed to
+  argon2id on the next successful login; the reject path pays the same
+  KDF cost for unknown usernames — no enumeration by timing). Sessions
+  die when `password_changed_at` moves past their issue time — password
+  change, disable, and re-enable all revoke, enforced per request by
+  `app/auth.py` against a 30 s cached read.
 - **Rate limiting / lockout** on `/api/login`: 5 failures inside 15
   minutes locks that username *and* that client IP for 15 minutes
   (mirrors Authelia's regulation block). In-memory, per-process.
@@ -98,26 +103,50 @@ Book-bot fronts its own auth now, the same posture Sync_Plex ships:
   superuser `POSTGRES_*` env (book_bot.users is unreachable through
   PostgREST by design) — the same path scripts/create_user.py uses.
 
-### the sample library (05_sample_library.sql)
+### the sample library is gone (06_drop_sample_library.sql)
 
-One shared, **view-only** library that every logged-in user can browse:
-a `libraries` row with a fixed uuid
-(`11111111-1111-1111-1111-111111111111`, see `app/config.py`). No
-table/column changes — the migration only inserts that row, adds two
-SELECT-only RLS policies keyed on the fixed id (never on the name, so a
-user naming their own library "Sample Library" gains nothing), and
-excludes it from the claim-a-memberless-library path. It has no members,
-so every write policy already refuses it; in the app it shows up last in
-`/api/me` with `role: "viewer"` and the frontend is strictly
-browse-only for it.
+Book-bot used to ship a shared, view-only "Sample Library" that every
+logged-in account saw alongside its own shelves. It is retired: users see
+only their own books. `06_drop_sample_library.sql` drops the two
+world-readable SELECT policies, deletes the fixed-uuid library row and
+its holdings, and drops the `is_sample_library()` designator. It is
+idempotent and safe on a database that never had it.
 
-Stocking is automatic and app-owned: every startup checks the shelf
-(`app/bootstrap.py`, in a background thread so boot isn't blocked) and
-fills it with the 300 well-known books from `app/sample_books.json` the
-first time, no-op forever after. Set `SAMPLE_AUTOSTOCK=false` to opt a
-process out. Rebuild the manifest with
-`scripts/build_sample_library.py`, and top up an already-stocked shelf
-with `scripts/seed_sample_library.py --force`.
+The 300 sample books stay in the shared `works`/`editions` catalog —
+that catalog is owned by nobody and doubles as a metadata cache, and
+other users' libraries reference the same rows. Read states on sample
+books are per-user reading history and are deliberately left alone.
+
+`04_user_libraries.sql` runs before this file on every apply and
+recreates the `members_insert` policy that `05_sample_library.sql` used
+to override, so there is nothing to restore by hand.
+
+## deploy order (this one matters)
+
+Three steps, and Book-Bot's app code goes **last**:
+
+1. **Converge the schema** — *already done, 2026-08-28.*
+   `apply_schema()` was run from the dev machine (it is the same
+   version-gated function the app runs at startup); `book_bot.deploy_meta`
+   is at version 7, `book_bot.users` has all four new columns, and the
+   sample library is gone. The change is additive, so the
+   currently-running auth service — which selects none of those columns —
+   was unaffected, and the running book-bot container simply stopped
+   showing the sample library.
+2. **Rebuild postgrest-auth.** Its `SELECT` needs `disabled`, so it had to
+   come after step 1. It starts verifying argon2id and minting `iat` and
+   `username`. **This is the outstanding step.**
+3. **Deploy book-bot's app code.**
+
+Do not put step 3 before step 2. `app/auth.py` rejects any token that has
+no `iat` claim, and the old auth service never mints one — so with the new
+app in front of the old service, every user would log in successfully and
+then get a 401 on every subsequent request, permanently. That is not the
+"one forced re-login" it looks like; there is no token the old service can
+issue that the new app will accept.
+
+Once step 2 lands, sessions minted by the old service stop validating and
+everyone re-logs in once. That is the expected, one-time cost.
 
 ## rollout on elitedesk (when ready)
 
@@ -130,10 +159,14 @@ docker compose -f docker_compose_projects.yaml up -d postgrest   # picks up new 
 docker compose -f docker_compose_projects.yaml restart swag      # loads bookbot.subdomain.conf
 
 # create the login — run it INSIDE the container, which has the
-# postgrest-mode env (POSTGREST_URL etc.) set by the compose fragment.
-# Running the script from a host shell silently falls back to dev mode
-# and writes to a local SQLite file instead of book_bot.users.
+# superuser POSTGRES_* env set by the compose fragment.
 docker compose -f docker_compose_projects.yaml exec book-bot uv run python scripts/create_user.py --username beca --password '...'
+
+# after that: disable, re-enable, change a password, or delete an account.
+# disable/enable/set-password all revoke the account's live sessions.
+docker compose -f docker_compose_projects.yaml exec book-bot uv run python scripts/manage_user.py show --username beca
+docker compose -f docker_compose_projects.yaml exec book-bot uv run python scripts/manage_user.py disable --username beca
+docker compose -f docker_compose_projects.yaml exec book-bot uv run python scripts/manage_user.py set-password --username beca --password '...'
 
 # libraries + membership are managed the same way (also container-side —
 # it uses the superuser POSTGRES_* env, bypassing the API and RLS):

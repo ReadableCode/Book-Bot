@@ -53,8 +53,9 @@ inside the cover or searching by title.
   Books + Open Library, merged.
 - **data** — the shared `apps` Postgres via **PostgREST**, with logins
   through the **postgrest-auth** service (identical pattern to load-log:
-  `book_bot` schema, `book_bot_user` role, JWT bearer tokens). A SQLite
-  dev mode runs everything locally with no Postgres/Docker.
+  `book_bot` schema, `book_bot_user` role, JWT bearer tokens). One
+  backend, no fallback: a missing `POSTGREST_URL` fails at import rather
+  than quietly writing somewhere nobody reads.
 - **frontend** — vanilla JS PWA in the terminal-navy style
   (style-terminal-navy tokens). Barcode scanning via the native
   BarcodeDetector API where available, vendored ZXing elsewhere
@@ -69,14 +70,11 @@ inside the cover or searching by title.
 Users log in with their own account, or create one right from the login
 screen ("create an account" — set `SIGNUP_ENABLED=false` to go
 invite-only). The app fronts its own login hardening instead of sitting
-behind Authelia: bcrypt hashes, per-username/per-IP lockout (5 failures
-in 15 minutes), signup throttling and security headers.
+behind Authelia: argon2id hashes, per-username/per-IP lockout (5 failures
+in 15 minutes), signup throttling and security headers. Disabling an
+account or changing its password revokes every session it already had.
 
-Everyone also sees the shared **✳ Sample Library**: one view-only shelf
-of 300 well-known books. The app stocks it automatically at startup the
-first time (`app/bootstrap.py`; a no-op once the shelf has books, from
-any process — local uvicorn or the container). Browse it from the `▤`
-button — nobody can edit it. First login
+You see your own books and nothing else. First login
 auto-creates a personal
 library; from the library view's `▤` button you can rename it, start
 another, or share it with another user by username — members see and
@@ -93,9 +91,8 @@ reading notes are always per-user, whichever library the book sits in.
 ### managing libraries from the cli
 
 Everything the `▤` button does (and a bit more) is also scriptable.
-`scripts/manage_library.py` talks to whatever backend the environment
-selects — the local SQLite file in dev mode, or Postgres directly (with
-the superuser `POSTGRES_*` env vars, bypassing the API) in production:
+`scripts/manage_library.py` talks to Postgres directly (with the
+superuser `POSTGRES_*` env vars, bypassing the API and RLS):
 
 ```sh
 # see every library, its members and book counts
@@ -115,7 +112,12 @@ exist before they can be added. In production, run both scripts inside
 the book-bot container, which has the right env (see
 [`deploy/README.md`](deploy/README.md)).
 
-## run it locally (dev mode, SQLite)
+## run it locally
+
+Local development runs against the real deployment — there is no offline
+mode. `.env` (symlinked to `personal_credentials/personal.env`) supplies
+`POSTGREST_URL`, `AUTH_URL`, `JWT_SECRET` and the superuser `POSTGRES_*`
+vars.
 
 ```sh
 uv sync
@@ -123,9 +125,7 @@ uv run python scripts/create_user.py --username beca --password 'choose-one'
 uv run uvicorn app.main:app --host 0.0.0.0 --port 8010
 ```
 
-Open http://127.0.0.1:8010. Data lands in `data/book_bot.db` (gitignored).
-A database from before multi-user libraries is migrated in place on first
-open.
+Open http://127.0.0.1:8010.
 
 ## tests
 
@@ -134,13 +134,19 @@ uv sync --group dev
 uv run pytest
 ```
 
+The suite hits the real PostgREST and the real auth service (conventions
+**I10**) using throwaway `ztest…` accounts that it creates and deletes.
+An unreachable dependency is a red test, never a skip. Nothing it creates
+is left behind.
+
 > Camera scanning needs a secure origin: `http://localhost` works on the
 > same machine, but to scan from a phone you need HTTPS (deploy behind the
 > reverse proxy, or use manual ISBN entry / title search).
 
 ## production
 
-See [`deploy/README.md`](deploy/README.md): three idempotent SQL files add
+See [`deploy/README.md`](deploy/README.md) — including the deploy order,
+which matters. Idempotent SQL files add
 the `book_bot` schema/role/users to the shared `apps` database, PostgREST
 gets `book_bot` appended to `PGRST_DB_SCHEMAS`, and the app runs with
 `POSTGREST_URL`/`AUTH_URL`/`JWT_SECRET` set, behind SWAG with HTTPS.
@@ -161,7 +167,7 @@ uv run python scripts/import_scans.py --file ~/SyncthingDB/Book-Bot/HoneyCrisp.j
 ```
 app/            FastAPI backend + static frontend (app/static)
 deploy/         one-time SQL + notes for the shared PostgREST stack
-scripts/        create_user.py, manage_library.py, import_scans.py,
-                seed_books.py
-tests/          pytest suite (API against a throwaway SQLite database)
+scripts/        create_user.py, manage_user.py, manage_library.py,
+                import_scans.py, seed_books.py
+tests/          pytest suite (real PostgREST + real auth service)
 ```

@@ -7,8 +7,13 @@ edge protections it provided move into the app:
     minutes (mirrors Authelia's regulation block). In-memory is fine for
     a single uvicorn process; it resets on restart.
   - username/password policy for self-signup.
-  - a dummy bcrypt hash so dev-mode login costs the same for unknown
+  - a dummy argon2id hash so dev-mode login costs the same for unknown
     users as for wrong passwords (no user enumeration by timing).
+
+Password hashing: argon2id is the standard (matching the shared
+postgrest-auth service). Stored hashes are self-identifying by prefix,
+so legacy bcrypt hashes still verify — the auth service rehashes them
+to argon2id on the next successful production login.
 
 TLS still terminates at the SWAG proxy in front.
 """
@@ -18,6 +23,8 @@ import threading
 import time
 
 import bcrypt
+from argon2 import PasswordHasher
+from argon2.exceptions import InvalidHashError, VerificationError
 from fastapi import Request
 
 MAX_FAILURES = 5
@@ -28,10 +35,30 @@ MIN_PASSWORD_LENGTH = 10
 
 _USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,31}$")
 
+_hasher = PasswordHasher()
+
 # verified for unknown usernames so the reject path always pays the
-# bcrypt cost — never compare against it with a real password expecting
-# a match ("!" is not a valid password start for bcrypt.checkpw inputs).
-DUMMY_HASH = bcrypt.hashpw(b"book-bot-dummy-password", bcrypt.gensalt()).decode()
+# KDF cost — never compare against it with a real password expecting
+# a match.
+DUMMY_HASH = _hasher.hash("book-bot-dummy-password")
+
+
+def hash_password(password: str) -> str:
+    return _hasher.hash(password)
+
+
+def verify_password(password: str, stored_hash: str) -> bool:
+    """Prefix-dispatched verify: $2* → bcrypt (legacy), else argon2id."""
+    if stored_hash.startswith("$2"):
+        try:
+            return bcrypt.checkpw(password.encode(), stored_hash.encode())
+        except ValueError:
+            return False
+    try:
+        _hasher.verify(stored_hash, password)
+        return True
+    except (VerificationError, InvalidHashError):
+        return False
 
 
 def validate_username(username: str) -> str:

@@ -1,11 +1,8 @@
 """Manage libraries and their members from the command line.
 
-Same dual-mode pattern as create_user.py:
-  dev mode (no POSTGREST_URL set): operates on the local SQLite database.
-  postgrest mode: connects straight to Postgres with the superuser
-      POSTGRES_* env vars, bypassing the API and row-level security —
-      run it inside the book-bot container on the server, where those
-      are set (see deploy/README.md).
+Connects straight to Postgres with the superuser POSTGRES_* env vars,
+bypassing the API and row-level security — run it inside the book-bot
+container on the server, where those are set (see deploy/README.md).
 
     uv run python scripts/manage_library.py list
     uv run python scripts/manage_library.py create --name "Cabin Books" \
@@ -24,62 +21,16 @@ import uuid
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import config  # noqa: E402
-from app.store import now_iso  # noqa: E402
-
-
-# --------------------------------------------------------------------------
-# backends — same operations against SQLite (dev) or Postgres (prod)
-# --------------------------------------------------------------------------
-
-class SqliteBackend:
-    def __init__(self):
-        from app.store import SqliteStore
-        self.store = SqliteStore()
-        print(f"dev mode — {self.store.path}")
-
-    def libraries(self):
-        libs = self.store._rows("SELECT * FROM libraries ORDER BY created_at")
-        members = self.store._rows(
-            "SELECT m.library_id, u.username FROM library_members m "
-            "JOIN users u ON u.id = m.user_id ORDER BY m.added_at")
-        counts = self.store._rows(
-            "SELECT library_id, count(*) AS n FROM library_books GROUP BY library_id")
-        by_lib = {}
-        for m in members:
-            by_lib.setdefault(str(m["library_id"]), []).append(m["username"])
-        n_by_lib = {str(c["library_id"]): c["n"] for c in counts}
-        return [{**lib, "members": by_lib.get(str(lib["id"]), []),
-                 "books": n_by_lib.get(str(lib["id"]), 0)} for lib in libs]
-
-    def user_by_name(self, username):
-        return self.store.find_user_by_username(None, username)
-
-    def create_library(self, name):
-        library = {"id": str(uuid.uuid4()), "name": name, "created_at": now_iso()}
-        self.store.create_library(None, library)
-        return library["id"]
-
-    def add_member(self, library_id, user_id):
-        self.store.add_member(None, {
-            "library_id": library_id, "user_id": user_id,
-            "role": "owner", "added_at": now_iso(),
-        })
+from app.db import superuser_conn  # noqa: E402
 
 
 class PostgresBackend:
     def __init__(self):
-        import psycopg2
         import psycopg2.extras
-        self.conn = psycopg2.connect(
-            host=os.environ["POSTGRES_URL"],
-            port=os.environ.get("POSTGRES_PORT", "5432"),
-            dbname=os.environ.get("POSTGRES_DB", "apps"),
-            user=os.environ["POSTGRES_USER"],
-            password=os.environ["POSTGRES_PASSWORD"],
-        )
+        self.conn = superuser_conn()
         self.conn.autocommit = True
         self.cursor_factory = psycopg2.extras.RealDictCursor
-        print(f"postgrest mode — {os.environ['POSTGRES_URL']}/{os.environ.get('POSTGRES_DB', 'apps')}")
+        print(f"{os.environ['POSTGRES_URL']}/{os.environ.get('POSTGRES_DB', 'apps')}")
 
     def _rows(self, query, params=()):
         with self.conn.cursor(cursor_factory=self.cursor_factory) as cur:
@@ -119,7 +70,7 @@ class PostgresBackend:
 
 
 def get_backend():
-    return SqliteBackend() if config.MODE == "dev" else PostgresBackend()
+    return PostgresBackend()
 
 
 # --------------------------------------------------------------------------

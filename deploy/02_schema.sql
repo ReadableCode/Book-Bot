@@ -8,12 +8,25 @@ CREATE SCHEMA IF NOT EXISTS book_bot;
 
 -- credentials read ONLY by the postgrest-auth service (superuser);
 -- step 3 revokes it from the PostgREST-facing roles.
+-- Standard auth shape (Solitaire's deploy/02_schema.sql is the reference):
+-- postgrest-auth reads role/disabled at login, and decode_token compares
+-- the token's iat against password_changed_at on every request.
 CREATE TABLE IF NOT EXISTS book_bot.users (
-    id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    username      text UNIQUE NOT NULL,
-    password_hash text NOT NULL,
-    created_at    timestamptz NOT NULL DEFAULT now()
+    id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    username            text UNIQUE NOT NULL,
+    password_hash       text NOT NULL,
+    role                text NOT NULL DEFAULT 'user',
+    display_name        text NOT NULL DEFAULT '',
+    disabled            boolean NOT NULL DEFAULT false,
+    created_at          timestamptz NOT NULL DEFAULT now(),
+    password_changed_at timestamptz NOT NULL DEFAULT now()
 );
+
+-- additive upgrade for databases created before the standard shape
+ALTER TABLE book_bot.users ADD COLUMN IF NOT EXISTS role text NOT NULL DEFAULT 'user';
+ALTER TABLE book_bot.users ADD COLUMN IF NOT EXISTS display_name text NOT NULL DEFAULT '';
+ALTER TABLE book_bot.users ADD COLUMN IF NOT EXISTS disabled boolean NOT NULL DEFAULT false;
+ALTER TABLE book_bot.users ADD COLUMN IF NOT EXISTS password_changed_at timestamptz NOT NULL DEFAULT now();
 
 -- one row per *book* (the story), grouping every edition of it.
 -- Keyed by the Open Library work key when known, else a normalized

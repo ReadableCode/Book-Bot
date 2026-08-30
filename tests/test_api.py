@@ -1,10 +1,7 @@
-"""API behavior: per-user libraries, sharing, copies, and read states."""
+"""API behavior against the real stack: per-user libraries, sharing,
+copies, and read states. Accounts are throwaway; see tests/conftest.py."""
 
-from conftest import make_meta, valid_isbn13
-
-ISBN_A = valid_isbn13("978000000001")   # hardcover
-ISBN_B = valid_isbn13("978000000002")   # paperback, same story
-ISBN_C = valid_isbn13("978000000003")   # unrelated book
+from conftest import make_meta, make_norm_key
 
 
 def add_book(client, headers, meta, status="library", **kw):
@@ -19,25 +16,25 @@ def add_book(client, headers, meta, status="library", **kw):
 
 def test_new_user_gets_a_personal_library(client, users):
     me = client.get("/api/me", headers=users("jason")).json()
-    assert me["username"] == "jason"
-    # own personal library plus the shared, view-only Sample Library
-    own = [lib for lib in me["libraries"] if lib["role"] != "viewer"]
-    assert len(own) == 1
-    assert me["libraries"][0]["name"] == "jason's library"
-    assert [m["username"] for m in me["libraries"][0]["members"]] == ["jason"]
+    name = users.name("jason")
+    assert me["username"] == name
+    # exactly one library, theirs — nothing shared rides along
+    assert len(me["libraries"]) == 1
+    assert me["libraries"][0]["name"] == f"{name}'s library"
+    assert [m["username"] for m in me["libraries"][0]["members"]] == [name]
 
 
-def test_users_cannot_see_each_others_books(client, users):
+def test_users_cannot_see_each_others_books(client, users, isbns):
     jason, beca = users("jason"), users("beca")
-    add_book(client, jason, make_meta("A Private Book", ISBN_A))
+    add_book(client, jason, make_meta("A Private Book", isbns.a))
 
     assert client.get("/api/books", headers=beca).json()["items"] == []
     me = client.get("/api/me", headers=beca).json()
-    assert me["libraries"][0]["name"] == "beca's library"
+    assert me["libraries"][0]["name"] == f"{users.name('beca')}'s library"
 
     # beca scans the same isbn: the shared catalog knows the edition, but
     # ownership comes back empty for her
-    look = client.get(f"/api/lookup?code={ISBN_A}", headers=beca).json()
+    look = client.get(f"/api/lookup?code={isbns.a}", headers=beca).json()
     assert look["found"] is True  # catalog doubles as metadata cache
     assert look["ownership"]["exact"] is None
     assert look["ownership"]["related"] == []
@@ -50,23 +47,24 @@ def test_users_cannot_see_each_others_books(client, users):
     assert client.delete(f"/api/books/{jason_book['id']}", headers=beca).status_code == 404
 
 
-def test_sharing_a_library(client, users):
+def test_sharing_a_library(client, users, isbns):
     jason, beca = users("jason"), users("beca")
-    add_book(client, jason, make_meta("Shared Shelf Book", ISBN_A))
+    jason_name, beca_name = users.name("jason"), users.name("beca")
+    add_book(client, jason, make_meta("Shared Shelf Book", isbns.a))
     lib = client.get("/api/me", headers=jason).json()["libraries"][0]
 
     # non-members can't invite
     resp = client.post(f"/api/libraries/{lib['id']}/members", headers=beca,
-                       json={"username": "beca"})
+                       json={"username": beca_name})
     assert resp.status_code == 404
 
     resp = client.post(f"/api/libraries/{lib['id']}/members", headers=jason,
-                       json={"username": "beca"})
+                       json={"username": beca_name})
     assert resp.status_code == 200
 
     me = client.get("/api/me", headers=beca).json()
     names = {lib["name"] for lib in me["libraries"]}
-    assert "jason's library" in names and "beca's library" in names
+    assert f"{jason_name}'s library" in names and f"{beca_name}'s library" in names
 
     # beca now sees and can manage the shared book
     items = client.get(f"/api/books?library_id={lib['id']}", headers=beca).json()["items"]
@@ -76,17 +74,16 @@ def test_sharing_a_library(client, users):
 
     # duplicate invite is a 409, unknown user a 404
     assert client.post(f"/api/libraries/{lib['id']}/members", headers=jason,
-                       json={"username": "beca"}).status_code == 409
+                       json={"username": beca_name}).status_code == 409
     assert client.post(f"/api/libraries/{lib['id']}/members", headers=jason,
-                       json={"username": "nobody"}).status_code == 404
+                       json={"username": "ztest-nobody-at-all"}).status_code == 404
 
 
-def test_third_user_stays_out_of_shared_library(client, users):
+def test_third_user_stays_out_of_shared_library(client, users, isbns):
     jason, new = users("jason"), users("newuser")
-    add_book(client, jason, make_meta("Family Book", ISBN_A))
+    add_book(client, jason, make_meta("Family Book", isbns.a))
     me = client.get("/api/me", headers=new).json()
-    assert [lib["name"] for lib in me["libraries"]
-            if lib["role"] != "viewer"] == ["newuser's library"]
+    assert [lib["name"] for lib in me["libraries"]] == [f"{users.name('newuser')}'s library"]
     assert client.get("/api/books", headers=new).json()["items"] == []
     assert client.get("/api/stats", headers=new).json()["library"] == 0
 
@@ -95,10 +92,10 @@ def test_third_user_stays_out_of_shared_library(client, users):
 # editions + copies
 # --------------------------------------------------------------------------
 
-def test_multiple_editions_and_identical_copies(client, users):
+def test_multiple_editions_and_identical_copies(client, users, isbns):
     jason = users("jason")
-    meta_hb = make_meta("The Way of Kings", ISBN_A, authors=["Brandon Sanderson"], fmt="hardcover")
-    meta_pb = make_meta("The Way of Kings", ISBN_B, authors=["Brandon Sanderson"], fmt="paperback")
+    meta_hb = make_meta("The Way of Kings", isbns.a, fmt="hardcover")
+    meta_pb = make_meta("The Way of Kings", isbns.b, fmt="paperback")
     add_book(client, jason, meta_hb)
     pb = add_book(client, jason, meta_pb)["book"]
 
@@ -114,15 +111,15 @@ def test_multiple_editions_and_identical_copies(client, users):
         "library": 2, "digital": 0, "wishlist": 0, "works": 1, "read": 0}
 
     # scanning the paperback again: exact hit + the hardcover as related
-    look = client.get(f"/api/lookup?code={ISBN_B}", headers=jason).json()
+    look = client.get(f"/api/lookup?code={isbns.b}", headers=jason).json()
     assert look["ownership"]["exact"]["copies"] == 2
     assert [r["format"] for r in look["ownership"]["related"]] == ["hardcover"]
 
 
-def test_digital_ownership_state(client, users):
+def test_digital_ownership_state(client, users, isbns):
     jason = users("jason")
-    add_book(client, jason, make_meta("Kindle Book", ISBN_A, fmt="ebook"), status="digital")
-    add_book(client, jason, make_meta("Paper Book", ISBN_B))
+    add_book(client, jason, make_meta("Kindle Book", isbns.a, fmt="ebook"), status="digital")
+    add_book(client, jason, make_meta("Paper Book", isbns.b))
 
     digital = client.get("/api/books?status=digital", headers=jason).json()["items"]
     assert [i["title"] for i in digital] == ["Kindle Book"]
@@ -141,16 +138,16 @@ def test_digital_ownership_state(client, users):
     assert client.get("/api/books?status=floppy-disk", headers=jason).status_code == 400
 
 
-def test_trophies_read_but_no_physical_copy(client, users):
+def test_trophies_read_but_no_physical_copy(client, users, isbns):
     jason = users("jason")
     # read on a kindle: owned digitally, no physical copy → trophy candidate
-    digital = add_book(client, jason, make_meta("Kindle Read", ISBN_A), status="digital")["book"]
+    digital = add_book(client, jason, make_meta("Kindle Read", isbns.a), status="digital")["book"]
     client.post("/api/reads", headers=jason, json={"work_id": digital["work_id"], "status": "read"})
     # read a borrowed book: not owned at all → trophy candidate
     client.post("/api/reads", headers=jason, json={
         "metadata": make_meta("Borrowed Read"), "status": "read"})
     # read and shelved: not a trophy
-    shelved = add_book(client, jason, make_meta("Shelf Read", ISBN_B))["book"]
+    shelved = add_book(client, jason, make_meta("Shelf Read", isbns.b))["book"]
     client.post("/api/reads", headers=jason, json={"work_id": shelved["work_id"], "status": "read"})
 
     reads = {r["title"]: r for r in client.get("/api/reads", headers=jason).json()["items"]}
@@ -164,21 +161,21 @@ def test_trophies_read_but_no_physical_copy(client, users):
     assert {r["title"] for r in trophies} == {"Kindle Read", "Borrowed Read"}
 
 
-def test_format_backfills_a_formatless_catalog_edition(client, users):
+def test_format_backfills_a_formatless_catalog_edition(client, users, isbns):
     jason, beca = users("jason"), users("beca")
-    add_book(client, jason, make_meta("Fmt Book", ISBN_A))  # no format known
+    add_book(client, jason, make_meta("Fmt Book", isbns.a))  # no format known
     # beca's separate library adds the same isbn and picks a format: the
     # user's choice must not be dropped just because the catalog row exists
-    added = add_book(client, beca, make_meta("Fmt Book", ISBN_A), format="paperback")
+    added = add_book(client, beca, make_meta("Fmt Book", isbns.a), format="paperback")
     assert added["book"]["format"] == "paperback"
     # jason's holding shows the enriched catalog format too
     assert client.get("/api/books", headers=jason).json()["items"][0]["format"] == "paperback"
 
 
-def test_re_adding_same_isbn_updates_instead_of_duplicating(client, users):
+def test_re_adding_same_isbn_updates_instead_of_duplicating(client, users, isbns):
     jason = users("jason")
-    add_book(client, jason, make_meta("Wish Book", ISBN_C), status="wishlist")
-    second = add_book(client, jason, make_meta("Wish Book", ISBN_C), status="library")
+    add_book(client, jason, make_meta("Wish Book", isbns.c), status="wishlist")
+    second = add_book(client, jason, make_meta("Wish Book", isbns.c), status="library")
     assert second["existed"] is True
     items = client.get("/api/books", headers=jason).json()["items"]
     assert len(items) == 1
@@ -189,9 +186,9 @@ def test_re_adding_same_isbn_updates_instead_of_duplicating(client, users):
 # read states
 # --------------------------------------------------------------------------
 
-def test_read_state_lifecycle(client, users):
+def test_read_state_lifecycle(client, users, isbns):
     jason, beca = users("jason"), users("beca")
-    book = add_book(client, jason, make_meta("Read Me", ISBN_A))["book"]
+    book = add_book(client, jason, make_meta("Read Me", isbns.a))["book"]
 
     resp = client.post("/api/reads", headers=jason, json={
         "work_id": book["work_id"], "status": "read", "rating": 5,
@@ -227,7 +224,7 @@ def test_read_state_lifecycle(client, users):
     assert client.get("/api/reads", headers=jason).json()["items"] == []
 
 
-def test_read_but_not_owned(client, users):
+def test_read_but_not_owned(client, users, isbns):
     jason = users("jason")
     # marked read straight from search — never added to any library
     resp = client.post("/api/reads", headers=jason, json={
@@ -248,7 +245,7 @@ def test_read_but_not_owned(client, users):
     assert stats["library"] == 0 and stats["read"] == 1
 
     # owning it later flips the flag (same work via title+author key)
-    add_book(client, jason, make_meta("Borrowed From The Library", ISBN_A))
+    add_book(client, jason, make_meta("Borrowed From The Library", isbns.a))
     reads = client.get("/api/reads", headers=jason).json()["items"]
     assert reads[0]["owned"] is True
 
@@ -261,7 +258,7 @@ def test_search_annotates_full_read_state(client, users, monkeypatch):
     jason = users("jason")
     client.post("/api/reads", headers=jason, json={
         "metadata": make_meta("Loaner"), "status": "read", "rating": 5, "notes": "great"})
-    nk = md.norm_key("Loaner", ["Test Author"])
+    nk = make_norm_key("Loaner")
     monkeypatch.setattr(md, "search_external", lambda q, limit=12: [
         {"title": "Loaner", "authors": ["Test Author"], "norm_key": nk, "isbn13": None}])
 
@@ -287,13 +284,13 @@ def test_read_state_validation(client, users):
 # libraries API
 # --------------------------------------------------------------------------
 
-def test_create_and_rename_library(client, users):
+def test_create_and_rename_library(client, users, isbns):
     jason = users("jason")
     resp = client.post("/api/libraries", headers=jason, json={"name": "cabin books"})
     lib_id = resp.json()["library"]["id"]
     assert resp.status_code == 200
 
-    add_book(client, jason, make_meta("Cabin Book", ISBN_C), library_id=lib_id)
+    add_book(client, jason, make_meta("Cabin Book", isbns.c), library_id=lib_id)
     items = client.get(f"/api/books?library_id={lib_id}", headers=jason).json()["items"]
     assert [i["title"] for i in items] == ["Cabin Book"]
     # default listing spans all my libraries

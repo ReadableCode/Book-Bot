@@ -112,38 +112,29 @@ function activeLibrary() {
   return me?.libraries.find((l) => l.id === activeLibraryId) || me?.libraries[0] || null;
 }
 
-// where adds land: never the read-only sample library — fall back to the
-// user's own first library when it's the one being browsed
+// where adds land: the library currently being browsed
 function targetLibraryId() {
-  return isSampleLibrary(activeLibrary()) ? null : (activeLibraryId || null);
+  return activeLibraryId || null;
 }
 
 /* ---------- hooks for the shelves views (shelf.js / shelf3d.js) ---------- */
 
-// query-string suffix scoping shelf loads to the active library (so the
-// shelves tab can show the sample library too)
+// query-string suffix scoping shelf loads to the active library
 function shelfLibraryScope() {
   return activeLibraryId ? `&library_id=${encodeURIComponent(activeLibraryId)}` : "";
 }
 
-// route a shelf book tap: manage sheet for own books, view-only sheet for
-// the sample library
+// route a shelf book tap to the manage sheet
 function openShelfBook(item) {
-  if (isSampleLibrary(activeLibrary())) openSampleSheet(item);
-  else openEditionSheet(item.id);
+  openEditionSheet(item.id);
 }
 
 function renderLibraryButton() {
   const lib = activeLibrary();
   const extra = me && me.libraries.length > 1 ? " ▾" : "";
-  const glyph = isSampleLibrary(lib) ? "✳" : "▤";
-  const label = lib ? `${glyph} ${lib.name}${extra}` : "▤ …";
+  const label = lib ? `▤ ${lib.name}${extra}` : "▤ …";
   $("#library-btn").textContent = label;
   $("#shelves-lib-btn").textContent = label;
-}
-
-function isSampleLibrary(lib) {
-  return lib?.role === "viewer";
 }
 
 function openLibrarySheet() {
@@ -151,18 +142,11 @@ function openLibrarySheet() {
   if (!lib) return;
   const rows = me.libraries.map((l) => `
     <div class="lib-row ${l.id === lib.id ? "active" : ""}" data-lib="${esc(l.id)}">
-      <div class="lib-name">${isSampleLibrary(l) ? "✳" : "▤"} ${esc(l.name)}</div>
-      <div class="lib-members">${isSampleLibrary(l)
-        ? "shared with everyone — view only"
-        : l.members.map((m) => esc(m.username || "?")).join(", ") || "just you"}</div>
+      <div class="lib-name">▤ ${esc(l.name)}</div>
+      <div class="lib-members">${
+        l.members.map((m) => esc(m.username || "?")).join(", ") || "just you"}</div>
     </div>`).join("");
-  const manage = isSampleLibrary(lib)
-    ? `<p class="hint">the sample library is a shared, view-only shelf of well-known
-        books — browse it, but nobody can change it.</p>
-      <div class="btnrow">
-        <button class="btn secondary" id="lib-create">+ start another library</button>
-      </div>`
-    : `<label class="field"><span>rename "${esc(lib.name)}"</span>
+  const manage = `<label class="field"><span>rename "${esc(lib.name)}"</span>
         <input id="lib-rename" value="${esc(lib.name)}"></label>
       <label class="field"><span>share "${esc(lib.name)}" with (username)</span>
         <input id="lib-invite" autocapitalize="none" placeholder="their book-bot username"></label>
@@ -288,7 +272,7 @@ $("#login-form").addEventListener("submit", async (e) => {
     await loadMe();
     showApp();
     if (authMode === "signup") {
-      toast("welcome! browse the shared ✳ Sample Library from the ▤ button", "ok");
+      toast("welcome! scan a barcode to start shelving", "ok");
       authMode = "login";
     }
   } catch (err) {
@@ -1031,30 +1015,15 @@ function renderList(view) {
       (ed.authors || "").toLowerCase().includes(filter) ||
       (ed.isbn13 || "").includes(filter));
   }
-  const sampleView = isSampleLibrary(activeLibrary());
   if (!items.length) {
     box.innerHTML = `<div class="empty">${filter || ownFilter ? "nothing matches that filter"
-      : sampleView ? "the sample library hasn't been stocked yet"
       : view === "library" ? "no books yet — scan a barcode to start shelving"
       : "wishlist is empty — scan or search while shopping"}</div>`;
     return;
   }
   box.innerHTML = items.map((ed) => bookCardHtml(ed, "local")).join("");
   box.querySelectorAll(".book-card").forEach((card) =>
-    card.addEventListener("click", () => {
-      if (!sampleView) return openEditionSheet(card.dataset.id);
-      // sample books are strictly view-only: metadata sheet, no actions
-      const item = items.find((ed) => String(ed.id) === card.dataset.id);
-      if (item) openSampleSheet(item);
-    }));
-}
-
-function openSampleSheet(item) {
-  openSheet(`
-    ${sheetHead(item)}
-    <div class="own-banner none">✳ sample library — view only</div>
-    ${descBlock(item)}
-  `);
+    card.addEventListener("click", () => openEditionSheet(card.dataset.id)));
 }
 
 $("#library-filter").addEventListener("input", () => renderList("library"));

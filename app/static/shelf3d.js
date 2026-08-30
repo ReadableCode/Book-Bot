@@ -2356,8 +2356,6 @@ import * as THREE from "./vendor/three.module.min.js";
     loading = false;
     if (pendingEnter) { pendingEnter = false; enter(); return; }  // scope changed mid-fetch
 
-    const sample = typeof isSampleLibrary === "function" && typeof activeLibrary === "function"
-      && isSampleLibrary(activeLibrary());
     const items = lib.items || [];
     const wishlist = (wl.items || [])
       .sort((a, b) => (b.added_at || "").localeCompare(a.added_at || ""));
@@ -2371,7 +2369,7 @@ import * as THREE from "./vendor/three.module.min.js";
     for (const b of items) b._read = readByWork.get(String(b.work_id)) || "";
 
     // trophies — read, but no physical copy — haunt the shelves as ghosts
-    const trophies = sample ? [] : reads
+    const trophies = reads
       .filter((r) => r.status === "read" && !r.owned_physical)
       .map((r) => ({
         id: `trophy-${r.work_id}`,
@@ -2394,7 +2392,7 @@ import * as THREE from "./vendor/three.module.min.js";
     seatDesks(wishlist, reads);
 
     // every trophy belongs on the wishlist too — file the missing ones
-    if (!sample && !wishSyncing) {
+    if (!wishSyncing) {
       const wished = new Set(wishlist.map((w) => String(w.work_id)));
       const missing = trophies.filter((t) => !wished.has(String(t._readItem.work_id)));
       if (missing.length) {

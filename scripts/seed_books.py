@@ -2,14 +2,13 @@
 
 Fetches popular works by subject (with real ISBNs, covers, publishers) and
 inserts them through the app's own add-book path, so work grouping and
-dedupe-by-ISBN behave exactly as if each book were added in the UI. Talks
-to whatever backend the .env selects — point POSTGREST_URL at prod and it
-seeds prod; leave it unset and it seeds the local SQLite db.
+dedupe-by-ISBN behave exactly as if each book were added in the UI. It
+seeds whatever POSTGREST_URL points at, so check that before running.
 
-Auth: mints a JWT with the shared secret (same claims dev-mode login
-issues), so no password is needed — but books now live in a user's
-library, so pass --username to say whose library gets seeded (their
-first library, auto-created if they have none).
+Auth: mints a JWT with the shared secret (same claims the auth service
+issues), so no password is needed — but books live in a user's library,
+so pass --username to say whose library gets seeded (their first library,
+auto-created if they have none).
 
     uv run python scripts/seed_books.py --username beca            # 300 books
     uv run python scripts/seed_books.py --username beca --count 50 --dry-run
@@ -101,12 +100,9 @@ def resolve_auth(username: str) -> AuthContext:
     """Books belong to a library, libraries to users — resolve whose
     shelves we're filling and mint their token."""
     store = get_store()
-    if config.MODE == "dev":
-        user = store.get_user(username)
-    else:
-        # the user directory is readable by any authenticated token
-        bootstrap = mint_token("00000000-0000-0000-0000-000000000000")
-        user = store.find_user_by_username(bootstrap, username)
+    # the user directory is readable by any authenticated token
+    bootstrap = mint_token("00000000-0000-0000-0000-000000000000")
+    user = store.find_user_by_username(bootstrap, username)
     if not user:
         sys.exit(f"no user named {username!r} — create one with scripts/create_user.py first")
     user_id = str(user["id"])
@@ -223,7 +219,7 @@ def main():
     args = parser.parse_args()
 
     auth = resolve_auth(args.username)
-    print(f"mode={config.MODE} target={config.POSTGREST_URL or config.SQLITE_PATH}")
+    print(f"target={config.POSTGREST_URL}")
 
     # preflight: fail before fetching anything if the token/store is broken.
     # Also provisions the user's library if they don't have one yet.
