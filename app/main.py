@@ -214,8 +214,18 @@ def api_signup(body: SignupBody, request: Request):
         accounts.create_user(username, body.password)
     except ValueError as exc:
         raise HTTPException(409, str(exc))
-    token = login(username, body.password, client_ip=client_ip(request))
-    _ensure_libraries(decode_token(token), username=username)
+    try:
+        token = login(username, body.password, client_ip=client_ip(request))
+        _ensure_libraries(decode_token(token), username=username)
+    except Exception:
+        # the user row above is already committed, and the user is about to
+        # be told signup failed — leave nothing behind, or their retry 409s
+        # on a username they were just told didn't get registered
+        try:
+            accounts.remove_user(username)
+        except Exception:
+            pass  # surfacing the original failure matters more
+        raise
     return {"token": token}
 
 

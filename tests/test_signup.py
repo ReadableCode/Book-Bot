@@ -6,6 +6,7 @@ failures below would otherwise lock the machine running the tests.
 """
 
 import pytest
+from fastapi import HTTPException
 
 from app import config
 from conftest import PASSWORD, next_test_ip
@@ -67,6 +68,32 @@ def test_signup_normalizes_username_to_lowercase(client, throwaway, ip, auth_ser
 def test_signup_can_be_disabled(client, throwaway, ip, monkeypatch):
     monkeypatch.setattr(config, "SIGNUP_ENABLED", False)
     assert signup(client, ip, throwaway("nope")).status_code == 403
+
+
+def test_failed_token_leg_rolls_back_the_account(client, throwaway, ip, monkeypatch, auth_service):
+    """Signup commits the user row before the token leg hits the auth
+    service. If that leg fails the user is told signup failed, so the row
+    must go too — otherwise their retry 409s on a username they were just
+    told didn't get registered."""
+    from app import accounts
+    from app import main as main_module
+
+    username = throwaway("rollback")
+
+    def auth_service_down(*args, **kwargs):
+        raise HTTPException(503, "auth service unavailable")
+
+    monkeypatch.setattr(main_module, "login", auth_service_down)
+    resp = signup(client, ip, username)
+    assert resp.status_code == 503
+    assert accounts.get_user(username) is None, "the half-created account must be rolled back"
+
+    # transient failure over: the same signup now works end to end
+    monkeypatch.undo()
+    resp = signup(client, ip, username)
+    assert resp.status_code == 200, resp.text
+    me = client.get("/api/me", headers=auth_header(resp)).json()
+    assert me["username"] == username
 
 
 def test_signup_rate_limited_per_ip(client, throwaway, ip, auth_service):
