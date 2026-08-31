@@ -78,6 +78,7 @@ def test_disabling_an_account_revokes_its_live_session(client, users):
 def test_reenabling_does_not_resurrect_the_old_session(client, users):
     header = users("jason")
     username = users.name("jason")
+    time.sleep(1.1)  # iat is second-granular; auth.py allows a 1 s grace
     accounts.set_disabled(username, True)
     accounts.set_disabled(username, False)
     _bypass_revocation_cache()

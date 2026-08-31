@@ -7,10 +7,15 @@ dependency is a red test, never a skip.
 Isolation without a scratch database:
   - accounts are `ztest<hex>` and are created and deleted per test, so
     every test starts with an empty library;
-  - every login forwards a TEST-NET-3 address as X-Forwarded-For. The
-    shared auth service locks per-username AND per-client-IP, so without
+  - every login forwards a random never-routed address as X-Forwarded-For.
+    The shared auth service locks per-username AND per-client-IP, so without
     this a test that exercises the lockout path would lock this machine
-    out of book-bot for 15 minutes;
+    out of book-bot for 15 minutes. That spoofing only survives on a
+    direct connection — the public edge (SWAG) rightly overwrites client
+    XFF with the real connecting IP — so on the LAN the suite talks to
+    the auth container directly (see the AUTH_URL redirect below). Off
+    the LAN the public edge works, but the lockout test's failures count
+    against this machine: one full run per 15 minutes;
   - the shared works/editions catalog has no per-user scoping, so every
     book a test creates carries RUN_MARKER as its author. That lands in
     works.norm_key, which is what the teardown sweep keys on. Nothing
@@ -23,6 +28,7 @@ import sys
 import uuid
 
 import pytest
+import requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -30,19 +36,35 @@ from app import accounts, auth, bootstrap, config, metadata  # noqa: E402
 from app.db import db_reachable, superuser_conn  # noqa: E402
 from app.store import postgrest_reachable  # noqa: E402
 
+# The per-test X-Forwarded-For isolation only works on a direct connection:
+# SWAG at https://auth.tinkernet.me overwrites client XFF with the real
+# connecting IP (correct at the edge — trusting it would let anyone dodge
+# the limiter), so through it every deliberate failure in the lockout tests
+# counts against this machine, and back-to-back runs 429 each other. The
+# auth container itself trusts XFF, so use it directly when it answers.
+# Anything other than the public default in AUTH_URL is deliberate — kept.
+if config.AUTH_URL == "https://auth.tinkernet.me" and os.environ.get("ELITEDESK_IP"):
+    _direct_auth = f"http://{os.environ['ELITEDESK_IP']}:8006"
+    try:
+        requests.get(f"{_direct_auth}/health", timeout=2).raise_for_status()
+        config.AUTH_URL = _direct_auth
+    except requests.RequestException:
+        pass  # off the LAN: the public edge works, one full run per 15 min
+
 # one marker per pytest session: usernames, and the author on every book a
 # test creates, so the teardown sweep can find exactly this run's rows.
 RUN_MARKER = f"ztest{uuid.uuid4().hex[:8]}"
 PASSWORD = "ztest-password-1"
 
-# TEST-NET-3 (RFC 5737), reserved for documentation and never routed. Each
-# test gets its own so the auth service's per-IP lockout can't leak between
-# tests — or onto the real address of the machine running them.
-_ip_counter = iter(range(1, 250))
-
-
+# Reserved class E space (RFC 1112, 240/4): never routed, like TEST-NET,
+# but big enough to draw fresh addresses every run. Each test gets its own
+# so the auth service's per-IP lockout can't leak between tests — or onto
+# the real address of the machine running them. Random, not a counter: the
+# limiter lives in the long-running auth container, so a deterministic
+# sequence hands run N+1 the locks run N's deliberate failures earned on
+# the very same addresses.
 def next_test_ip() -> str:
-    return f"203.0.113.{next(_ip_counter)}"
+    return f"240.{random.randrange(256)}.{random.randrange(256)}.{random.randrange(1, 255)}"
 
 
 @pytest.fixture(scope="session")
@@ -101,12 +123,16 @@ def _sweep_catalog():
             work_ids = [row[0] for row in cur.fetchall()]
             if not work_ids:
                 return
+            # psycopg2 returns uuid columns as str, so the array adapts as
+            # text[] — cast back or every comparison is uuid = text
             cur.execute(
                 f"DELETE FROM {schema}.library_books WHERE edition_id IN "
-                f"(SELECT id FROM {schema}.editions WHERE work_id = ANY(%s))", (work_ids,))
-            cur.execute(f"DELETE FROM {schema}.read_states WHERE work_id = ANY(%s)", (work_ids,))
-            cur.execute(f"DELETE FROM {schema}.editions WHERE work_id = ANY(%s)", (work_ids,))
-            cur.execute(f"DELETE FROM {schema}.works WHERE id = ANY(%s)", (work_ids,))
+                f"(SELECT id FROM {schema}.editions WHERE work_id = ANY(%s::uuid[]))", (work_ids,))
+            cur.execute(f"DELETE FROM {schema}.read_states WHERE work_id = ANY(%s::uuid[])",
+                        (work_ids,))
+            cur.execute(f"DELETE FROM {schema}.editions WHERE work_id = ANY(%s::uuid[])",
+                        (work_ids,))
+            cur.execute(f"DELETE FROM {schema}.works WHERE id = ANY(%s::uuid[])", (work_ids,))
     finally:
         conn.close()
 

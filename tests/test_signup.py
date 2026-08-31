@@ -1,6 +1,6 @@
 """Self-signup and login hardening, against the real auth service.
 
-Every request carries a TEST-NET-3 X-Forwarded-For (see conftest): the
+Every request carries a random never-routed X-Forwarded-For (see conftest): the
 service's lockout is keyed per-username AND per-IP, and the deliberate
 failures below would otherwise lock the machine running the tests.
 """
