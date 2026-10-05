@@ -317,15 +317,19 @@ async function refreshStats() {
 
 /* ---------- scanning ---------- */
 
-async function startScanner() {
+async function startScanner(bulk = false) {
   const status = $("#scan-status");
   status.textContent = "";
+  bulkMode = bulk;
+  if (bulk) beep(null); // unlock audio inside the tap that started the session
   try {
     $("#scanner-wrap").classList.remove("hidden");
     $("#scan-idle").classList.add("hidden");
     $("#scan-stop").classList.remove("hidden");
+    $("#scan-stop").textContent = bulk ? "done with this stack" : "stop camera";
+    $(".scan-box").classList.toggle("bulk", bulk);
     await Scanner.start($("#scanner-video"), onBarcode);
-    status.textContent = "looking for a barcode…";
+    status.textContent = bulk ? "bulk add — scan the first book" : "looking for a barcode…";
   } catch (err) {
     stopScanner();
     status.textContent = `camera unavailable: ${err.message}. type the isbn or upc below instead.`;
@@ -334,16 +338,21 @@ async function startScanner() {
 
 function stopScanner() {
   Scanner.stop();
+  bulkMode = false;
+  $(".scan-box").classList.remove("bulk");
+  $("#bulk-card").classList.add("hidden");
   $("#scanner-wrap").classList.add("hidden");
   $("#scan-stop").classList.add("hidden");
   $("#scan-idle").classList.remove("hidden");
   $("#scan-status").textContent = "";
 }
 
-$("#scan-start").addEventListener("click", startScanner);
+$("#scan-start").addEventListener("click", () => startScanner());
+$("#bulk-start").addEventListener("click", () => startScanner(true));
 $("#scan-stop").addEventListener("click", stopScanner);
 
 async function onBarcode(text) {
+  if (bulkMode) { await bulkScan(text); return; }
   $("#scan-status").textContent = `read ${text} — looking it up…`;
   await lookupCode(text, { resumeScannerOnClose: true });
 }
@@ -378,6 +387,247 @@ async function lookupCode(code, { resumeScannerOnClose = false, quiet = false } 
     return false;
   }
 }
+
+/* ---------- bulk add ----------
+   Shelving a stack: scan, one tap for the binding, next book — no sheet.
+   A book that doesn't go in stops the scanner with a low double tone while
+   it is still in hand, and stays in the session list at its place in the
+   stack until it's dealt with. The list survives a reload. */
+
+const BULK_FORMATS = ["hardcover", "paperback", "mass market", "special edition"];
+let bulkMode = false;
+let bulkSession = [];
+try { bulkSession = JSON.parse(localStorage.getItem("bookbot_bulk") || "[]"); } catch { /* start empty */ }
+let audioCtx = null;
+
+// ok=true: one short high blip. ok=false: two low tones. ok=null: silent
+// (creates the context inside a user gesture, which iOS requires)
+function beep(ok) {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+    if (ok === null) return;
+    const tone = (freq, at, len) => {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.frequency.value = freq;
+      gain.gain.value = 0.25;
+      osc.connect(gain).connect(audioCtx.destination);
+      osc.start(audioCtx.currentTime + at);
+      osc.stop(audioCtx.currentTime + at + len);
+    };
+    if (ok) tone(880, 0, 0.09);
+    else { tone(196, 0, 0.25); tone(196, 0.33, 0.25); }
+  } catch { /* no audio — the card still says it */ }
+  if (!ok && navigator.vibrate) navigator.vibrate([200, 100, 200]);
+}
+
+function bulkLog(entry) {
+  const n = bulkSession.length ? bulkSession[bulkSession.length - 1].n + 1 : 1;
+  bulkSession.push({ n, ...entry });
+  bulkSave();
+}
+
+function bulkSave() {
+  localStorage.setItem("bookbot_bulk", JSON.stringify(bulkSession));
+  renderBulkSession();
+}
+
+// the nearest book that did go in, before (dir -1) or after (dir 1) a miss
+function bulkNeighbor(idx, dir) {
+  for (let i = idx + dir; i >= 0 && i < bulkSession.length; i += dir) {
+    if (bulkSession[i].kind !== "miss") return bulkSession[i].title;
+  }
+  return "";
+}
+
+function bulkWhere(idx) {
+  const before = bulkNeighbor(idx, -1);
+  const after = bulkNeighbor(idx, 1);
+  if (before && after) return `between “${before}” and “${after}”`;
+  if (before) return `right after “${before}”`;
+  if (after) return `right before “${after}”`;
+  return "";
+}
+
+function renderBulkSession() {
+  $("#bulk-session").classList.toggle("hidden", !bulkSession.length);
+  const misses = bulkSession.filter((e) => e.kind === "miss").length;
+  const added = bulkSession.length - misses;
+  $("#bulk-count").innerHTML = `${added} added`
+    + (misses ? ` · <span class="bulk-miss-count">${misses} set aside</span>` : "");
+  $("#bulk-list").innerHTML = bulkSession.map((e, idx) => {
+    if (e.kind === "miss") {
+      return `
+        <div class="bulk-row miss">
+          <span class="n">✗</span>
+          <span class="t">not added — barcode ${esc(e.code)}
+            <small>${esc(bulkWhere(idx) || e.reason)}</small></span>
+          <button type="button" class="link-btn" data-search="${e.n}">search</button>
+          <button type="button" class="link-btn" data-done="${e.n}">done</button>
+        </div>`;
+    }
+    return `
+      <button type="button" class="bulk-row" data-book="${esc(e.bookId)}">
+        <span class="n">${e.n}</span>
+        <span class="t">${esc(e.title)}${e.kind === "copy" ? " <small>another copy</small>" : ""}</span>
+        <span class="chip">${esc(e.format || "format unknown")}</span>
+      </button>`;
+  }).reverse().join("");
+}
+
+$("#bulk-list").addEventListener("click", async (ev) => {
+  const el = ev.target.closest("[data-book], [data-search], [data-done]");
+  if (!el) return;
+  if (el.dataset.done) {
+    bulkSession = bulkSession.filter((e) => String(e.n) !== el.dataset.done);
+    bulkSave();
+  } else if (el.dataset.search) {
+    switchView("search");
+    $("#search-input").focus();
+  } else {
+    // fix a format, add a copy or remove it — the normal book sheet
+    Scanner.pause();
+    await openEditionSheet(el.dataset.book);
+    if ($("#sheet").classList.contains("hidden")) bulkResume();
+    else sheetOnClose = bulkResume;
+  }
+});
+
+$("#bulk-clear").addEventListener("click", () => {
+  const btn = $("#bulk-clear");
+  if (!btn.dataset.armed) {
+    btn.dataset.armed = "1";
+    btn.textContent = "tap again — clears this list only, the books stay";
+    setTimeout(() => { btn.dataset.armed = ""; btn.textContent = "clear list"; }, 3000);
+    return;
+  }
+  btn.dataset.armed = "";
+  btn.textContent = "clear list";
+  bulkSession = [];
+  bulkSave();
+});
+
+function bulkCard(html) {
+  const card = $("#bulk-card");
+  card.innerHTML = html;
+  card.classList.remove("hidden");
+  card.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
+// only while a card isn't waiting on a tap, so a book is never skipped unseen
+function bulkResume() {
+  if (bulkMode && $("#bulk-card").classList.contains("hidden")) Scanner.resume();
+}
+
+function bulkNext(code) {
+  $("#bulk-card").classList.add("hidden");
+  $("#scan-status").textContent = "next book…";
+  if (code) Scanner.ignore(code, 4000);
+  Scanner.resume();
+}
+
+async function bulkScan(code) {
+  $("#scan-status").textContent = `read ${code} — looking it up…`;
+  let data;
+  try {
+    data = await api(`/api/lookup?code=${encodeURIComponent(code)}`);
+  } catch (err) {
+    if (token) bulkMiss(code, `lookup failed: ${err.message}`);
+    return;
+  }
+  $("#scan-status").textContent = "";
+  if (!data.ok) { bulkMiss(code, data.reason); return; }
+  if (!data.found) { bulkMiss(code, "not in google books or open library"); return; }
+  bulkOffer(code, data.metadata, data.ownership);
+}
+
+function bulkMiss(code, reason) {
+  beep(false);
+  const last = bulkNeighbor(bulkSession.length, -1);
+  bulkCard(`
+    <div class="bulk-miss-title">✗ this book was not added</div>
+    <div class="bulk-miss-why">${esc(reason)}</div>
+    <div class="bulk-miss-why">barcode ${esc(code)}${last ? ` · it comes right after “${esc(last)}”` : ""}</div>
+    <div class="btnrow">
+      <button class="btn secondary" id="bulk-retry">scan it again</button>
+      <button class="btn primary" id="bulk-aside">set it aside, keep going</button>
+    </div>`);
+  $("#bulk-retry").addEventListener("click", () => bulkNext(""));
+  $("#bulk-aside").addEventListener("click", () => {
+    bulkLog({ kind: "miss", code, reason });
+    bulkNext(code);
+  });
+}
+
+function bulkOffer(code, meta, ownership) {
+  const exact = ownership.exact;
+  const onShelf = exact && exact.status === "library";
+  // a 12-digit upc is the old mass-market paperback barcode
+  const guess = meta.format || (code.replace(/\D/g, "").length === 12 ? "mass market" : "");
+  let note = "";
+  if (onShelf) {
+    const detail = [exact.format, exact.copies > 1 ? `×${exact.copies}` : ""].filter(Boolean).join(" ");
+    note = `already in the library${detail ? ` (${esc(detail)})` : ""}`;
+  } else if (exact) {
+    note = `${HOLD_PHRASES[exact.status]} — a tap moves it to the library`;
+  } else if (ownership.related.length) {
+    note = `you have this book as: ${ownership.related.map((e) => esc(e.format || "unknown format")).join(", ")}`;
+  }
+  const actions = onShelf
+    ? `<div class="btnrow">
+         <button class="btn primary" id="bulk-copy">+ another copy</button>
+         <button class="btn secondary" id="bulk-skip">skip</button>
+       </div>`
+    : `<div class="bulk-formats">
+         ${BULK_FORMATS.map((f) => `<button class="btn ${f === guess ? "primary" : "secondary"}" data-fmt="${f}">${f}</button>`).join("")}
+       </div>
+       <button class="link-btn" id="bulk-skip">skip this one</button>`;
+  bulkCard(`
+    ${sheetHead(meta)}
+    ${note ? `<div class="own-banner ${onShelf ? "ok" : "warn"}">${note}</div>` : ""}
+    ${actions}`);
+
+  $("#bulk-skip").addEventListener("click", () => bulkNext(code));
+  if (onShelf) {
+    $("#bulk-copy").addEventListener("click", async () => {
+      try {
+        await api(`/api/books/${exact.id}`, {
+          method: "PATCH", body: JSON.stringify({ copies: (exact.copies || 1) + 1 }),
+        });
+      } catch (err) { toast(err.message, "err"); return; }
+      bulkDone(code, { kind: "copy", title: meta.title, format: exact.format, bookId: exact.id, code });
+    });
+    return;
+  }
+  $("#bulk-card").querySelectorAll("[data-fmt]").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      const fmt = btn.dataset.fmt;
+      let book;
+      try {
+        book = (await api("/api/books", {
+          method: "POST",
+          body: JSON.stringify({ status: "library", metadata: meta, format: fmt, library_id: targetLibraryId() }),
+        })).book;
+        // the catalog may already hold another format for this isbn; the
+        // person holding the book wins
+        if (book.format !== fmt) {
+          await api(`/api/books/${book.id}`, { method: "PATCH", body: JSON.stringify({ format: fmt }) });
+        }
+      } catch (err) { toast(err.message, "err"); return; }
+      bulkDone(code, { kind: "added", title: meta.title, format: fmt, bookId: book.id, code });
+    }));
+}
+
+function bulkDone(code, entry) {
+  beep(true);
+  bulkLog(entry);
+  refreshStats();
+  invalidateBooks();
+  bulkNext(code);
+}
+
+renderBulkSession();
 
 /* ---------- bottom sheet ---------- */
 

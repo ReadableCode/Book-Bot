@@ -19,6 +19,7 @@ const Scanner = (() => {
   let zxingReader = null;
   let zxingHints = null;
   let grabCanvas = null;
+  let ignored = { code: "", until: 0 }; // a code to look past for a moment
 
   async function nativeSupported() {
     if (!("BarcodeDetector" in window)) return false;
@@ -64,6 +65,7 @@ const Scanner = (() => {
 
   function handleCode(text) {
     if (!detecting) return;
+    if (text === ignored.code && Date.now() < ignored.until) return;
     detecting = false;
     if (navigator.vibrate) navigator.vibrate(80);
     onCode(text);
@@ -104,6 +106,8 @@ const Scanner = (() => {
 
   function pause() { detecting = false; }
   function resume() { if (running) detecting = true; }
+  // the book just handled is usually still in frame when detection resumes
+  function ignore(code, ms) { ignored = { code, until: Date.now() + ms }; }
 
   function stop() {
     running = false;
@@ -116,5 +120,5 @@ const Scanner = (() => {
     if (video) video.srcObject = null;
   }
 
-  return { start, stop, pause, resume, isRunning: () => running };
+  return { start, stop, pause, resume, ignore, isRunning: () => running };
 })();

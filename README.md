@@ -47,6 +47,20 @@ Older mass-market paperbacks sometimes carry a retail UPC that doesn't
 encode the ISBN — the app detects that and suggests scanning the barcode
 inside the cover or searching by title.
 
+## bulk add
+
+For shelving a stack: **bulk add a stack** on the scan tab keeps the camera
+running and replaces the sheet with a card under the viewfinder. Scan, tap
+the binding (the catalog's guess is highlighted), next book. Everything
+lands in the active library.
+
+A book that doesn't go in (unknown barcode, failed lookup) plays a low
+double tone and stops the scanner until you answer, so the book in your
+hand is the one that failed. Setting it aside keeps it in the session list
+at its place in the stack: *not added, between "The Giver" and "Hatchet"*.
+Tap an added row to fix its format, add a copy or remove it. The list is
+kept on the device until cleared.
+
 ## stack
 
 - **backend** — FastAPI (Python, run with `uv`). Metadata from Google
@@ -150,6 +164,15 @@ which matters. Idempotent SQL files add
 the `book_bot` schema/role/users to the shared `apps` database, PostgREST
 gets `book_bot` appended to `PGRST_DB_SCHEMAS`, and the app runs with
 `POSTGREST_URL`/`AUTH_URL`/`JWT_SECRET` set, behind SWAG with HTTPS.
+
+## backups and restore
+
+There is no book-bot-specific backup. The `book_bot` schema lives in the
+shared `apps` database, which the server's nightly `pg_dumpall` covers
+(03:00, 14 nights kept, mirrored to the backup host). The job, the restore
+procedure, how to cut out just the `book_bot` schema, and the log of
+restore drills are in the `personal_dev` repo's README under "Server
+backups" and "Restoring the postgres backup".
 
 ## importing old scans
 

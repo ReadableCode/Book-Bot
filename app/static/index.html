@@ -66,9 +66,20 @@
             <p class="hint">point the camera at the barcode on the back cover.<br>
               works with isbn and upc barcodes.</p>
             <button id="scan-start" class="btn primary wide">start camera</button>
+            <button id="bulk-start" class="btn secondary wide">bulk add a stack</button>
+            <p class="hint bulk-hint">bulk add: scan, tap the binding, next book. one tap each,
+              straight into the library — and it stops you when a book doesn't go in.</p>
           </div>
           <button id="scan-stop" class="btn secondary wide hidden">stop camera</button>
           <div id="scan-status" class="scan-status"></div>
+          <div id="bulk-card" class="bulk-card hidden"></div>
+        </div>
+        <div id="bulk-session" class="bulk-session hidden">
+          <div class="bulk-session-head">
+            <span id="bulk-count"></span>
+            <button type="button" class="link-btn" id="bulk-clear">clear list</button>
+          </div>
+          <div id="bulk-list" class="bulk-list"></div>
         </div>
         <p class="empty">no camera handy? type anything — a title, an author, or a barcode
           (even part of one) — into <button type="button" class="link-btn" id="goto-search">⌕ search</button></p>

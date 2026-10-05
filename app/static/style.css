@@ -198,6 +198,42 @@ main#views {
 }
 .scan-status { color: var(--amber-bright); font-size: .78rem; margin-top: .6rem; min-height: 1.1em; }
 
+/* bulk add: smaller viewfinder so the card and its buttons stay on screen */
+.scan-idle .btn + .btn { margin-top: .5rem; }
+.scan-idle .bulk-hint { margin: .7rem 0 0; }
+.scan-box.bulk #scanner-video { max-height: 26vh; }
+.bulk-card { margin-top: .7rem; border-top: 1px solid var(--border); padding-top: .8rem; }
+.bulk-card .btnrow { display: flex; gap: .5rem; margin-top: .7rem; }
+.bulk-card .btnrow .btn { flex: 1; }
+.bulk-formats { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; margin: .7rem 0 .5rem; }
+.bulk-formats .btn { padding: .95rem .5rem; }
+.bulk-miss-title { color: var(--dot-red); font-weight: 700; font-size: 1rem; }
+.bulk-miss-why { color: var(--ink-2); font-size: .8rem; margin-top: .35rem; line-height: 1.5; }
+
+.bulk-session { margin-top: .9rem; }
+.bulk-session-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  color: var(--ink-2); font-size: .8rem; margin-bottom: .45rem;
+}
+.bulk-miss-count { color: var(--dot-red); font-weight: 700; }
+.bulk-list { display: flex; flex-direction: column; gap: .3rem; }
+.bulk-row {
+  display: flex; align-items: center; gap: .6rem;
+  width: 100%; text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--ink); font-size: .8rem;
+  padding: .45rem .65rem;
+}
+button.bulk-row { cursor: pointer; }
+.bulk-row .n { color: var(--muted); min-width: 2ch; text-align: right; flex: none; }
+.bulk-row .t { flex: 1; min-width: 0; }
+.bulk-row small { display: block; color: var(--muted); font-size: .7rem; margin-top: .1rem; }
+.bulk-row .chip { flex: none; }
+.bulk-row.miss { border-color: rgba(179, 69, 77, .6); }
+.bulk-row.miss .n, .bulk-row.miss .t { color: var(--dot-red); }
+
 .row-form { display: flex; gap: .55rem; }
 .row-form input { flex: 1; }
 
