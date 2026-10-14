@@ -1,6 +1,8 @@
--- book-bot: server setup, step 6 — retire the shared Sample Library.
--- Run as the postgres superuser AFTER 04_user_libraries.sql. Idempotent,
+-- book-bot: retire the shared Sample Library, applied by app/bootstrap.py at
+-- startup after 04_user_libraries.sql (SCHEMA_FILES). Idempotent,
 -- and safe on a database that never had the sample library at all.
+-- Running this file by hand with psql might work, but it is not the intended
+-- use: change it here and let the app apply it.
 --
 -- Users see only their own books now. This reverses 05_sample_library.sql
 -- (deleted from the repo): the world-readable SELECT policies go, the

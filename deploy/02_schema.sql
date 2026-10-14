@@ -1,5 +1,6 @@
--- book-bot: one-time server setup, step 2 of 4.
--- Run as the postgres superuser against the shared "apps" database.
+-- book-bot schema, applied by app/bootstrap.py at startup (SCHEMA_FILES).
+-- Running this file by hand with psql might work, but it is not the intended
+-- use: change it here and let the app apply it.
 -- Idempotent: safe to re-run. Creates the current (multi-user) schema for
 -- fresh installs; 04_user_libraries.sql upgrades pre-multi-user databases
 -- and applies grants + row-level security.
@@ -7,7 +8,7 @@
 CREATE SCHEMA IF NOT EXISTS book_bot;
 
 -- credentials read ONLY by the postgrest-auth service (superuser);
--- step 3 revokes it from the PostgREST-facing roles.
+-- 03_secure_users.sql revokes it from the PostgREST-facing roles.
 -- Standard auth shape (Solitaire's deploy/02_schema.sql is the reference):
 -- postgrest-auth reads role/disabled at login, and decode_token compares
 -- the token's iat against password_changed_at on every request.

@@ -11,8 +11,8 @@ RUN uv sync --frozen --no-dev
 COPY app/ ./app/
 COPY scripts/ ./scripts/
 
-# Idempotent schema/role setup runs from the entrypoint before the app starts
-# (book-bot's answer to load-log's `alembic upgrade head`).
+# deploy/ ships in the image because the app applies its schema/role setup
+# itself at startup (app/bootstrap.py, from the FastAPI lifespan).
 COPY deploy/ ./deploy/
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
 RUN chmod +x ./docker-entrypoint.sh

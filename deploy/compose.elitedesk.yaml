@@ -36,9 +36,9 @@ services:
       JWT_SECRET: ${POSTGREST_JWT_SECRET}
       # Books API auth — anonymous Google Books calls are quota-blocked.
       GOOGLE_SERVICE_ACCOUNT: ${GOOGLE_SERVICE_ACCOUNT}
-      # POSTGRES_* kept so the container's entrypoint can run
-      # scripts/init_db.py (idempotent schema/role setup connects to Postgres
-      # directly) before uvicorn starts — book-bot's alembic-upgrade-head.
+      # POSTGRES_* kept so the app's startup bootstrap (app/bootstrap.py, run
+      # from the FastAPI lifespan) can connect to Postgres directly for its
+      # idempotent schema/role setup.
       POSTGRES_URL: postgres
       POSTGRES_PORT: "5432"
       POSTGRES_DB: apps

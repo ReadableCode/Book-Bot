@@ -47,11 +47,11 @@ but not free: it takes exclusive locks and the cache reload disrupts
 in-flight requests, so it must not run on every boot. Bump
 `SCHEMA_VERSION` whenever the SQL files change.) Without superuser
 creds it logs a skip and serves anyway. `scripts/init_db.py [--force]`
-runs the same thing by hand, and the numbered SQL files remain runnable
-directly (`psql -U postgres -d apps -f ...`); `01_create_role.sql` is
-the manual, non-idempotent equivalent of the role block. The
-cluster-global roles (`postgrest_authenticator`, `web_anon`) must
-already exist — they do, from load-log's setup.
+runs the same bootstrap from the command line. The SQL files are never
+applied by hand. The cluster-global roles (`postgrest_authenticator`,
+`web_anon`) must already exist; they are created by the
+`postgres-cluster-roles` service in the Docker repo
+(`Docker/postgres/cluster_roles.sql`).
 
 ### the multi-user migration (04_user_libraries.sql)
 

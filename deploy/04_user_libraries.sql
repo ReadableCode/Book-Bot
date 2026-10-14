@@ -1,5 +1,7 @@
--- book-bot: server setup, step 4 — multi-user libraries + read states.
--- Run as the postgres superuser AFTER 02_schema.sql. Idempotent.
+-- book-bot: multi-user libraries + read states, applied by app/bootstrap.py
+-- at startup after 02_schema.sql (SCHEMA_FILES). Idempotent.
+-- Running this file by hand with psql might work, but it is not the intended
+-- use: change it here and let the app apply it.
 --
 -- Does three things:
 --   1. upgrades a pre-multi-user database: ownership columns move off

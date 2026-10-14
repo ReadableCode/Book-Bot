@@ -76,8 +76,9 @@ def apply_schema(force: bool = False) -> bool:
             missing = {"postgrest_authenticator", "web_anon"} - found
             if missing:
                 raise RuntimeError(
-                    f"missing cluster roles: {', '.join(sorted(missing))} — "
-                    "run load-log's deploy/01_create_roles.sql first (shared PostgREST setup)")
+                    f"missing cluster roles: {', '.join(sorted(missing))}: "
+                    "they are created by the postgres-cluster-roles service in the Docker repo "
+                    "(Docker/postgres/cluster_roles.sql)")
             cur.execute(ROLE_SQL)
             for name in SCHEMA_FILES:
                 log.info("applying deploy/%s", name)

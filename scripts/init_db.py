@@ -3,7 +3,8 @@
 The app does this itself on every startup (app/bootstrap.py, called from
 the FastAPI lifespan), so this wrapper exists only for running the same
 idempotent setup by hand — e.g. against a fresh database before any app
-process has pointed at it.
+process has pointed at it. Running it by hand is not the intended use; the
+app converges the schema itself.
 
     uv run python scripts/init_db.py
 """
