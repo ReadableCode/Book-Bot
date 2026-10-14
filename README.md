@@ -145,6 +145,7 @@ Open http://127.0.0.1:8010.
 
 ```sh
 uv sync --group dev
+uv run flake8 .
 uv run pytest
 ```
 

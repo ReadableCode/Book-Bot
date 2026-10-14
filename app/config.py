@@ -9,6 +9,7 @@ writes nobody will ever see. Local development points at the real
 deployment, which is the documented approach for the rest of the fleet.
 """
 
+import json
 import os
 
 from dotenv import load_dotenv
@@ -42,11 +43,9 @@ GOOGLE_BOOKS_API_KEY = os.environ.get("GOOGLE_BOOKS_API_KEY") or None
 # Books API calls are quota-blocked (429) these days, so authenticated
 # requests are the only reliable path. Same GOOGLE_SERVICE_ACCOUNT JSON
 # blob the other repos' google_tools.py uses from personal.env.
-import json as _json
-
 _sa_raw = os.environ.get("GOOGLE_SERVICE_ACCOUNT")
 try:
-    GOOGLE_SERVICE_ACCOUNT_INFO = _json.loads(_sa_raw) if _sa_raw else None
+    GOOGLE_SERVICE_ACCOUNT_INFO = json.loads(_sa_raw) if _sa_raw else None
 except ValueError:
     GOOGLE_SERVICE_ACCOUNT_INFO = None
 

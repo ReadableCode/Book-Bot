@@ -84,8 +84,9 @@ class AddBookBody(BaseModel):
     format: str | None = None
     notes: str | None = None
     library_id: str | None = None  # defaults to the user's first library
-    new_edition: bool = False      # add as a sibling edition of the same work
-                                   # (a different format whose isbn we don't know)
+    # add as a sibling edition of the same work (a different format whose
+    # isbn we don't know)
+    new_edition: bool = False
 
 
 class UpdateBookBody(BaseModel):
