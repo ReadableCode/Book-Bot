@@ -77,8 +77,9 @@ def apply_schema(force: bool = False) -> bool:
             if missing:
                 raise RuntimeError(
                     f"missing cluster roles: {', '.join(sorted(missing))}: "
-                    "they are created by the postgres-cluster-roles service in the Docker repo "
-                    "(Docker/postgres/cluster_roles.sql)")
+                    "compose.yaml creates them on Postgres's first start; with your own "
+                    "Postgres, create them first (see compose.external.yaml). On the author's "
+                    "server the Docker repo's postgres-cluster-roles service creates them")
             cur.execute(ROLE_SQL)
             for name in SCHEMA_FILES:
                 log.info("applying deploy/%s", name)
