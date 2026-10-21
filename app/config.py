@@ -1,7 +1,8 @@
 """Runtime configuration.
 
-One backend, no modes. Data goes through the shared PostgREST deployment
-and logins through the postgrest-auth service (same pattern as load-log).
+One backend, no modes. Data goes through the shared PostgREST deployment;
+logins are verified in-process by the postgrest-auth library against
+book_bot.users over the superuser connection (app/db.py).
 
 POSTGREST_URL and JWT_SECRET are required: a missing or misspelled one
 raises here, at import, rather than degrading to something that accepts
@@ -22,11 +23,10 @@ if not POSTGREST_URL:
         "POSTGREST_URL must be set — Book-Bot has no local fallback store. "
         "Point it at the shared deployment (https://pgrest.tinkernet.me).")
 
-AUTH_URL = os.environ.get("AUTH_URL", "https://auth.tinkernet.me").rstrip("/")
 APP_SCHEMA = os.environ.get("APP_SCHEMA", "book_bot")
 
-# Must match the auth service / PostgREST secret so the backend can verify
-# the tokens it forwards. POSTGREST_JWT_SECRET is the name that secret has
+# Must match PostgREST's secret: logins sign their tokens with it, and the
+# backend verifies the tokens it forwards. POSTGREST_JWT_SECRET is the name that secret has
 # in personal_credentials/personal.env (the repo's .env symlink), so accept
 # it as a fallback.
 JWT_SECRET = os.environ.get("JWT_SECRET") or os.environ.get("POSTGREST_JWT_SECRET", "")

@@ -5,8 +5,8 @@ inserts them through the app's own add-book path, so work grouping and
 dedupe-by-ISBN behave exactly as if each book were added in the UI. It
 seeds whatever POSTGREST_URL points at, so check that before running.
 
-Auth: mints a JWT with the shared secret (same claims the auth service
-issues), so no password is needed — but books live in a user's library,
+Auth: mints a JWT with the shared secret (postgrest_auth.mint_token, the
+same claims a login carries), so no password is needed — but books live in a user's library,
 so pass --username to say whose library gets seeded (their first library,
 auto-created if they have none).
 
@@ -19,9 +19,7 @@ import os
 import random
 import sys
 import time
-from datetime import datetime, timedelta, timezone
-
-import jwt
+import postgrest_auth
 import requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -84,16 +82,9 @@ def genre_accepts(genre: str, doc: dict) -> bool:
     return dom in FICTION_FAMILY or dom is None
 
 
-def mint_token(user_id: str) -> str:
-    return jwt.encode(
-        {
-            "role": f"{config.APP_SCHEMA}_user",
-            "user_id": user_id,
-            "exp": datetime.now(timezone.utc) + timedelta(hours=2),
-        },
-        config.JWT_SECRET,
-        algorithm="HS256",
-    )
+def mint_token(user_id: str, username: str) -> str:
+    return postgrest_auth.mint_token(config.APP_SCHEMA, user_id, username, "user",
+                                     jwt_secret=config.JWT_SECRET, ttl_hours=2)
 
 
 def resolve_auth(username: str) -> AuthContext:
@@ -101,12 +92,12 @@ def resolve_auth(username: str) -> AuthContext:
     shelves we're filling and mint their token."""
     store = get_store()
     # the user directory is readable by any authenticated token
-    bootstrap = mint_token("00000000-0000-0000-0000-000000000000")
+    bootstrap = mint_token("00000000-0000-0000-0000-000000000000", username)
     user = store.find_user_by_username(bootstrap, username)
     if not user:
         sys.exit(f"no user named {username!r} — create one with scripts/create_user.py first")
     user_id = str(user["id"])
-    return AuthContext(token=mint_token(user_id), user_id=user_id)
+    return AuthContext(token=mint_token(user_id, username), user_id=user_id)
 
 
 def pick_isbn13(candidates: list[str]) -> str | None:

@@ -1,8 +1,8 @@
 """book-bot — personal library terminal.
 
 FastAPI backend: serves the mobile-first frontend from app/static and a
-small JSON API. All book data flows through the store layer (PostgREST in
-production, SQLite in dev); metadata comes from Google Books/Open Library.
+small JSON API. All book data flows through the store layer (PostgREST);
+metadata comes from Google Books/Open Library.
 
 Shape of the world: works and editions are a shared catalog; ownership
 lives in library_books inside a library that one or more users own
@@ -15,11 +15,12 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
+from postgrest_auth import LoginRateLimiter
 from pydantic import BaseModel
 
 from . import accounts, bootstrap, config, metadata, security
 from .auth import AuthContext, decode_token, login, require_auth
-from .security import LoginRateLimiter, client_ip
+from .security import client_ip
 from .store import HOLDING_STATUSES, READ_STATUSES, StoreError, get_store, new_id, now_iso
 
 
@@ -35,7 +36,8 @@ async def _lifespan(app):
 app = FastAPI(title="book-bot", docs_url=None, redoc_url=None, lifespan=_lifespan)
 
 # app-level brute-force protection now that Authelia no longer fronts the
-# app (same policy Sync_Plex uses: 5 failures / 15 min locks the key)
+# app: 5 failures / 15 min locks the key (postgrest-auth's limiter). Login
+# keys are per username and per IP; signup throttles per IP.
 login_limiter = LoginRateLimiter()
 signup_limiter = LoginRateLimiter()
 
@@ -178,15 +180,7 @@ def _check_lockout(limiter: LoginRateLimiter, *keys: str) -> None:
 @app.post("/api/login")
 def api_login(body: LoginBody, request: Request):
     username = body.username.strip()  # exact-match: pre-signup accounts may be mixed-case
-    keys = (f"user:{username.lower()}", f"ip:{client_ip(request)}")
-    _check_lockout(login_limiter, *keys)
-    try:
-        token = login(username, body.password, client_ip=client_ip(request))
-    except HTTPException as exc:
-        if exc.status_code == 401:
-            login_limiter.record_failure(*keys)
-        raise
-    login_limiter.record_success(*keys)
+    token = login(username, body.password, client_ip=client_ip(request), limiter=login_limiter)
     _ensure_libraries(decode_token(token), username=username)
     return {"token": token}
 
@@ -216,7 +210,7 @@ def api_signup(body: SignupBody, request: Request):
     except ValueError as exc:
         raise HTTPException(409, str(exc))
     try:
-        token = login(username, body.password, client_ip=client_ip(request))
+        token = login(username, body.password, client_ip=client_ip(request), limiter=login_limiter)
         _ensure_libraries(decode_token(token), username=username)
     except Exception:
         # the user row above is already committed, and the user is about to

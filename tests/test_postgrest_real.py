@@ -1,8 +1,8 @@
 """Real-PostgREST round trip — the full production path, end to end.
 
-Throwaway accounts log in through the REAL postgrest-auth service, so this
-exercises argon2id verify -> JWT claims -> app-side session validation ->
-RLS on the book_bot tables. Red if any hop is unreachable, never skipped.
+Throwaway accounts log in through the real login path (the postgrest-auth
+library against the real users table), so this exercises argon2id verify ->
+JWT claims -> app-side session validation -> RLS on the book_bot tables. Red if any hop is unreachable, never skipped.
 """
 
 import time
@@ -21,7 +21,7 @@ def test_postgrest_is_reachable(live):
     assert ok, detail
 
 
-def test_service_token_carries_the_claims_the_app_needs(users):
+def test_login_token_carries_the_claims_the_app_needs(users):
     """user_id drives RLS; iat and username drive revocation. A token
     missing any of them cannot be validated (conventions §4)."""
     header = users("jason")
@@ -33,13 +33,13 @@ def test_service_token_carries_the_claims_the_app_needs(users):
     assert payload["iat"] and payload["exp"] > payload["iat"]
 
 
-def test_a_service_token_validates_in_app(users):
+def test_a_login_token_validates_in_app(users):
     token = users("jason")["Authorization"].split()[1]
     context = auth.decode_token(token)
     assert context.user_id
 
 
-def test_wrong_password_is_rejected_by_the_service(client, users):
+def test_wrong_password_is_rejected_at_login(client, users):
     users("jason")
     with pytest.raises(Exception) as exc:
         auth.login(users.name("jason"), "definitely-not-the-password", client_ip=users.ip)
@@ -69,7 +69,7 @@ def test_disabling_an_account_revokes_its_live_session(client, users):
     assert resp.status_code == 401, resp.text
     assert "account unavailable" in resp.json()["detail"]
 
-    # and the service refuses a fresh login too
+    # and a fresh login is refused too
     with pytest.raises(Exception) as exc:
         auth.login(username, PASSWORD, client_ip=users.ip)
     assert getattr(exc.value, "status_code", None) == 401
@@ -106,7 +106,7 @@ def test_changing_the_password_revokes_the_old_session(client, users):
 
 
 def test_a_token_without_iat_is_refused(client, users):
-    """Tokens minted before the service carried iat/username cannot be
+    """Tokens without iat/username (an older token format) cannot be
     revocation-checked, so they must force one re-login rather than pass."""
     users("jason")
     payload = {

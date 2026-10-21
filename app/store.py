@@ -27,7 +27,7 @@ Data model:
                    future Goodreads sync lands shelves/read-dates/ratings
                    (editions match by isbn13, works by norm_key).
   users          — credentials (argon2id; legacy bcrypt); in postgres this table is only
-                   readable by the auth service, never through PostgREST —
+                   readable over the superuser connection, never through PostgREST —
                    the user_directory view exposes usernames only.
 """
 

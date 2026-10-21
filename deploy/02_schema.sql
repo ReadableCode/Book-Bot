@@ -7,11 +7,11 @@
 
 CREATE SCHEMA IF NOT EXISTS book_bot;
 
--- credentials read ONLY by the postgrest-auth service (superuser);
+-- credentials read ONLY by the app's superuser connection;
 -- 03_secure_users.sql revokes it from the PostgREST-facing roles.
 -- Standard auth shape (Solitaire's deploy/02_schema.sql is the reference):
--- postgrest-auth reads role/disabled at login, and decode_token compares
--- the token's iat against password_changed_at on every request.
+-- login (the postgrest-auth library) reads role/disabled, and decode_token
+-- compares the token's iat against password_changed_at on every request.
 CREATE TABLE IF NOT EXISTS book_bot.users (
     id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     username            text UNIQUE NOT NULL,

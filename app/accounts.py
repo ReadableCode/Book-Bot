@@ -19,15 +19,12 @@ and surfaces as a 500 — that is a deployment fault, not a user's mistake.
 
 import psycopg2
 import psycopg2.errors
+from postgrest_auth import hash_password
 
-from . import config, security
+from . import config
 from .db import superuser_conn
 
 USERS = f"{config.APP_SCHEMA}.users"
-
-
-def hash_password(password: str) -> str:
-    return security.hash_password(password)
 
 
 def _connect():

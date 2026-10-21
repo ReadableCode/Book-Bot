@@ -2,7 +2,7 @@
 
 Inserts into book_bot.users in the shared apps database using the
 superuser POSTGRES_* env vars (same as load-log's create_user). The hash
-is argon2id, matching what the auth service mints.
+is argon2id, from the postgrest-auth library that also verifies logins.
 
     uv run python scripts/create_user.py --username beca --password '...'
 """

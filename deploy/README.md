@@ -2,15 +2,17 @@
 
 book-bot follows the load-log pattern: no database code of its own in the
 request path — a `book_bot` schema in the shared `apps` Postgres, CRUD via
-the shared PostgREST, logins via the postgrest-auth service. In production
+the shared PostgREST, logins verified in-process by the postgrest-auth
+library against `book_bot.users`. In production
 it runs as a container in the elitedesk stack at
 **https://bookbot.tinkernet.me**.
 
-## how the pieces fit (all prepared, awaiting merge)
+## how the pieces fit
 
 - `deploy/compose.elitedesk.yaml` (this repo) — the `book-bot` service:
   builds the repo's `Dockerfile`, serves on port **8010**, talks to
-  `http://postgrest:3000` / `http://auth:8000` inside the compose network.
+  `http://postgrest:3000` and to `postgres` (superuser, for the users
+  table and the schema bootstrap) inside the compose network.
 - `Docker/docker_compose_projects.yaml` — pulls the fragment in via
   `include:`, and its `postgrest` service exposes the schema:
   `PGRST_DB_SCHEMAS: load_log, book_bot` (book-bot's client selects its
@@ -68,12 +70,11 @@ itself even for clients that talk to PostgREST directly.
 
 Two operational notes:
 
-- **JWTs must carry the user's uuid.** The postgrest-auth service must
-  mint the `book_bot.users.id` value as a `user_id` (or `sub`) claim —
-  the dev-mode login already does, and load-log-style tokens do too. A
-  token without it is rejected by the API (clear 401) and matches no RLS
-  policy, so nothing leaks; users just need to log in again after the
-  auth service is updated. Verify with:
+- **JWTs must carry the user's uuid.** Login (the postgrest-auth
+  library) mints the `book_bot.users.id` value as a `user_id` claim (`sub`
+  is also accepted). A token without it is rejected by the API (clear
+  401) and matches no RLS policy, so nothing leaks; its holder just logs
+  in again. Verify with:
   `psql -c "SET ROLE book_bot_user; SET request.jwt.claims='{\"user_id\":\"<uuid>\"}'; SELECT count(*) FROM book_bot.libraries;"`
 - **Restart PostgREST once after the first deploy** so its schema cache
   picks up the new tables and the `library_books → editions` /
@@ -83,8 +84,8 @@ Two operational notes:
 
 Book-bot fronts its own auth now, the same posture Sync_Plex ships:
 
-- **argon2id password hashes**, checked by the postgrest-auth service in
-  prod (legacy bcrypt hashes verify by prefix and get rehashed to
+- **argon2id password hashes**, checked in-process by the postgrest-auth
+  library (legacy bcrypt hashes verify by prefix and get rehashed to
   argon2id on the next successful login; the reject path pays the same
   KDF cost for unknown usernames — no enumeration by timing). Sessions
   die when `password_changed_at` moves past their issue time — password
@@ -92,7 +93,8 @@ Book-bot fronts its own auth now, the same posture Sync_Plex ships:
   `app/auth.py` against a 30 s cached read.
 - **Rate limiting / lockout** on `/api/login`: 5 failures inside 15
   minutes locks that username *and* that client IP for 15 minutes
-  (mirrors Authelia's regulation block). In-memory, per-process.
+  (mirrors Authelia's regulation block; the postgrest-auth library's
+  limiter). In-memory, per-process.
 - **Security headers** (CSP, `X-Frame-Options: DENY`, nosniff,
   referrer-policy) on every response; TLS/HSTS stay at SWAG.
 - **Self-signup** at `POST /api/signup` ("create an account" on the
@@ -121,32 +123,11 @@ books are per-user reading history and are deliberately left alone.
 recreates the `members_insert` policy that `05_sample_library.sql` used
 to override, so there is nothing to restore by hand.
 
-## deploy order (this one matters)
+## deploy order
 
-Three steps, and Book-Bot's app code goes **last**:
-
-1. **Converge the schema** — *already done, 2026-08-28.*
-   `apply_schema()` was run from the dev machine (it is the same
-   version-gated function the app runs at startup); `book_bot.deploy_meta`
-   is at version 7, `book_bot.users` has all four new columns, and the
-   sample library is gone. The change is additive, so the
-   currently-running auth service — which selects none of those columns —
-   was unaffected, and the running book-bot container simply stopped
-   showing the sample library.
-2. **Rebuild postgrest-auth.** Its `SELECT` needs `disabled`, so it had to
-   come after step 1. It starts verifying argon2id and minting `iat` and
-   `username`. **This is the outstanding step.**
-3. **Deploy book-bot's app code.**
-
-Do not put step 3 before step 2. `app/auth.py` rejects any token that has
-no `iat` claim, and the old auth service never mints one — so with the new
-app in front of the old service, every user would log in successfully and
-then get a 401 on every subsequent request, permanently. That is not the
-"one forced re-login" it looks like; there is no token the old service can
-issue that the new app will accept.
-
-Once step 2 lands, sessions minted by the old service stop validating and
-everyone re-logs in once. That is the expected, one-time cost.
+Book-bot depends only on Postgres and PostgREST. The schema converges at
+app startup, and login runs in-process, so a deploy is just the
+container rebuild.
 
 ## rollout on elitedesk (when ready)
 
@@ -185,9 +166,9 @@ more to refresh its schema cache.
 
 ```sh
 POSTGREST_URL=https://pgrest.tinkernet.me \
-AUTH_URL=https://auth.tinkernet.me \
 uv run uvicorn app.main:app --host 0.0.0.0 --port 8010
 ```
 
-(`JWT_SECRET` comes from the `.env` symlink's `POSTGREST_JWT_SECRET`.)
+(`JWT_SECRET` comes from the `.env` symlink's `POSTGREST_JWT_SECRET`, and
+the superuser `POSTGRES_*` vars that login needs come from the same file.)
 Camera scanning needs HTTPS, so phones should use the SWAG domain.

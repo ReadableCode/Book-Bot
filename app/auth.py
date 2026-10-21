@@ -1,13 +1,12 @@
 """Login + JWT verification.
 
-Credentials go to the postgrest-auth service (AUTH_URL /token with
-schema=book_bot), which checks book_bot.users (argon2id standard, legacy
-bcrypt rehashed on login) and mints an HS256 JWT that PostgREST trusts.
-We verify the same secret here before doing any work on a request, and
-compare the token's iat against the user row's password_changed_at (30 s
+Login runs in-process through the postgrest-auth library: it checks the
+password against book_bot.users over the superuser connection (argon2id
+standard, legacy bcrypt rehashed on login), applies the per-username and
+per-IP lockout, and mints an HS256 JWT signed with the secret PostgREST
+trusts. Every request verifies that secret before doing any work, and
+compares the token's iat against the user row's password_changed_at (30 s
 cache) so password change and disable revoke existing sessions statelessly.
-
-This is the only login path. There is no local verification fallback.
 
 Every token must carry the user's uuid as a "user_id" (or "sub") claim —
 library membership and read states hang off it, both here and in the
@@ -19,8 +18,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 import jwt
+import postgrest_auth
 import psycopg2
-import requests
 from fastapi import HTTPException, Request
 
 from . import config
@@ -33,38 +32,25 @@ class AuthContext:
     user_id: str
 
 
-def login(username: str, password: str, client_ip: str | None = None) -> str:
-    # forward the browser's IP: the auth service keeps its own per-IP
-    # lockout, and without this every book-bot user would share this
-    # container's IP in that limiter
-    headers = {"X-Forwarded-For": client_ip} if client_ip else {}
-    resp = requests.post(
-        f"{config.AUTH_URL}/token",
-        json={"schema": config.APP_SCHEMA, "username": username, "password": password},
-        headers=headers,
-        timeout=config.HTTP_TIMEOUT,
-    )
-    if resp.status_code == 401:
+def login(username: str, password: str, client_ip: str | None = None,
+          limiter: postgrest_auth.LoginRateLimiter | None = None) -> str:
+    try:
+        return postgrest_auth.login(
+            superuser_conn, config.APP_SCHEMA, username, password,
+            jwt_secret=config.JWT_SECRET, client_ip=client_ip, limiter=limiter,
+        )
+    except postgrest_auth.InvalidCredentials:
         raise HTTPException(401, "invalid username or password")
-    if resp.status_code == 429:
-        try:
-            detail = resp.json().get("detail", "")
-        except ValueError:
-            detail = ""
-        raise HTTPException(429, detail or "too many attempts — try again later")
-    if resp.status_code >= 400:
-        raise HTTPException(502, f"auth service error ({resp.status_code})")
-    return resp.json()["token"]
+    except postgrest_auth.LoginLocked as exc:
+        raise HTTPException(429, str(exc))
+    except (psycopg2.Error, KeyError):
+        raise HTTPException(503, "login unavailable — try again")
 
 
 def _user_id_from_payload(payload: dict) -> str:
     user_id = payload.get("user_id") or payload.get("sub")
     if not user_id:
-        raise HTTPException(
-            401,
-            "token carries no user_id claim — the auth service must mint one "
-            "(see deploy/README.md); log in again",
-        )
+        raise HTTPException(401, "token carries no user_id claim — log in again")
     return str(user_id)
 
 
@@ -97,12 +83,12 @@ def _auth_row(username: str) -> tuple | None:
 
 def _check_revocation(payload: dict) -> None:
     """Reject sessions issued before the user's password_changed_at, and
-    sessions for disabled or deleted users. Tokens from before the auth
-    service minted iat/username force one re-login."""
+    sessions for disabled or deleted users. Tokens without iat/username (an
+    older token format) force one re-login."""
     username = payload.get("username")
     issued_ts = payload.get("iat")
     if not username or issued_ts is None:
-        raise HTTPException(401, "session predates the current auth service — log in again")
+        raise HTTPException(401, "session predates the current token format — log in again")
     try:
         row = _auth_row(username)
     except (psycopg2.Error, KeyError):

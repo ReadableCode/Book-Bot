@@ -65,9 +65,11 @@ kept on the device until cleared.
 
 - **backend** — FastAPI (Python, run with `uv`). Metadata from Google
   Books + Open Library, merged.
-- **data** — the shared `apps` Postgres via **PostgREST**, with logins
-  through the **postgrest-auth** service (identical pattern to load-log:
-  `book_bot` schema, `book_bot_user` role, JWT bearer tokens). One
+- **data** — the shared `apps` Postgres via **PostgREST** (identical
+  pattern to load-log: `book_bot` schema, `book_bot_user` role, JWT bearer
+  tokens). Logins are verified in-process by the
+  [postgrest-auth](https://github.com/ReadableCode/postgrest-auth) library
+  against `book_bot.users`, which signs the token PostgREST trusts. One
   backend, no fallback: a missing `POSTGREST_URL` fails at import rather
   than quietly writing somewhere nobody reads.
 - **frontend** — vanilla JS PWA in the terminal-navy style
@@ -130,8 +132,8 @@ the book-bot container, which has the right env (see
 
 Local development runs against the real deployment — there is no offline
 mode. `.env` (symlinked to `personal_credentials/personal.env`) supplies
-`POSTGREST_URL`, `AUTH_URL`, `JWT_SECRET` and the superuser `POSTGRES_*`
-vars.
+`POSTGREST_URL`, `JWT_SECRET` and the superuser `POSTGRES_*` vars (login
+reads the users table over that connection).
 
 ```sh
 uv sync
@@ -149,7 +151,7 @@ uv run flake8 .
 uv run pytest
 ```
 
-The suite hits the real PostgREST and the real auth service (conventions
+The suite hits the real PostgREST and the real database (conventions
 **I10**) using throwaway `ztest…` accounts that it creates and deletes.
 An unreachable dependency is a red test, never a skip. Nothing it creates
 is left behind.
@@ -164,7 +166,8 @@ See [`deploy/README.md`](deploy/README.md) — including the deploy order,
 which matters. Idempotent SQL files add
 the `book_bot` schema/role/users to the shared `apps` database, PostgREST
 gets `book_bot` appended to `PGRST_DB_SCHEMAS`, and the app runs with
-`POSTGREST_URL`/`AUTH_URL`/`JWT_SECRET` set, behind SWAG with HTTPS.
+`POSTGREST_URL`/`JWT_SECRET` and the superuser `POSTGRES_*` vars set,
+behind SWAG with HTTPS.
 
 ## backups and restore
 
@@ -193,5 +196,5 @@ app/            FastAPI backend + static frontend (app/static)
 deploy/         one-time SQL + notes for the shared PostgREST stack
 scripts/        create_user.py, manage_user.py, manage_library.py,
                 import_scans.py, seed_books.py
-tests/          pytest suite (real PostgREST + real auth service)
+tests/          pytest suite (real PostgREST + real database)
 ```

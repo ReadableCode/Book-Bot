@@ -87,8 +87,9 @@ GRANT SELECT, INSERT, UPDATE, DELETE
     TO book_bot_user;
 GRANT SELECT ON book_bot.user_directory TO book_bot_user;
 
--- The JWT must carry the user's uuid: postgrest-auth mints it from
--- book_bot.users.id as the "user_id" claim ("sub" also accepted).
+-- The JWT must carry the user's uuid: login (the postgrest-auth library)
+-- mints it from book_bot.users.id as the "user_id" claim ("sub" also
+-- accepted).
 CREATE OR REPLACE FUNCTION book_bot.jwt_user_id() RETURNS uuid
 LANGUAGE plpgsql STABLE AS $$
 DECLARE

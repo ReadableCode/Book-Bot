@@ -1,8 +1,8 @@
-"""Self-signup and login hardening, against the real auth service.
+"""Self-signup and login hardening, against the real users table.
 
 Every request carries a random never-routed X-Forwarded-For (see conftest): the
-service's lockout is keyed per-username AND per-IP, and the deliberate
-failures below would otherwise lock the machine running the tests.
+lockout is keyed per-username AND per-IP, and the deliberate failures below
+would otherwise leak into other tests' logins.
 """
 
 import pytest
@@ -30,7 +30,7 @@ def auth_header(resp):
 # signup
 # --------------------------------------------------------------------------
 
-def test_signup_creates_account_with_empty_library(client, throwaway, ip, auth_service):
+def test_signup_creates_account_with_empty_library(client, throwaway, ip):
     username = throwaway("newbie")
     resp = signup(client, ip, username)
     assert resp.status_code == 200, resp.text
@@ -40,7 +40,7 @@ def test_signup_creates_account_with_empty_library(client, throwaway, ip, auth_s
     assert client.get("/api/books", headers=headers).json()["items"] == []
 
 
-def test_signup_duplicate_username(client, throwaway, ip, auth_service):
+def test_signup_duplicate_username(client, throwaway, ip):
     username = throwaway("newbie")
     assert signup(client, ip, username).status_code == 200
     assert signup(client, ip, username).status_code == 409
@@ -57,7 +57,7 @@ def test_signup_rejects_bad_username(client, ip):
         assert signup(client, ip, bad).status_code == 400, bad
 
 
-def test_signup_normalizes_username_to_lowercase(client, throwaway, ip, auth_service):
+def test_signup_normalizes_username_to_lowercase(client, throwaway, ip):
     username = throwaway("newbie")
     resp = signup(client, ip, username.upper())
     assert resp.status_code == 200
@@ -70,9 +70,9 @@ def test_signup_can_be_disabled(client, throwaway, ip, monkeypatch):
     assert signup(client, ip, throwaway("nope")).status_code == 403
 
 
-def test_failed_token_leg_rolls_back_the_account(client, throwaway, ip, monkeypatch, auth_service):
-    """Signup commits the user row before the token leg hits the auth
-    service. If that leg fails the user is told signup failed, so the row
+def test_failed_token_leg_rolls_back_the_account(client, throwaway, ip, monkeypatch):
+    """Signup commits the user row before the token leg logs the new
+    account in. If that leg fails the user is told signup failed, so the row
     must go too — otherwise their retry 409s on a username they were just
     told didn't get registered."""
     from app import accounts
@@ -80,10 +80,10 @@ def test_failed_token_leg_rolls_back_the_account(client, throwaway, ip, monkeypa
 
     username = throwaway("rollback")
 
-    def auth_service_down(*args, **kwargs):
-        raise HTTPException(503, "auth service unavailable")
+    def login_unavailable(*args, **kwargs):
+        raise HTTPException(503, "login unavailable — try again")
 
-    monkeypatch.setattr(main_module, "login", auth_service_down)
+    monkeypatch.setattr(main_module, "login", login_unavailable)
     resp = signup(client, ip, username)
     assert resp.status_code == 503
     assert accounts.get_user(username) is None, "the half-created account must be rolled back"
@@ -96,7 +96,7 @@ def test_failed_token_leg_rolls_back_the_account(client, throwaway, ip, monkeypa
     assert me["username"] == username
 
 
-def test_signup_rate_limited_per_ip(client, throwaway, ip, auth_service):
+def test_signup_rate_limited_per_ip(client, throwaway, ip):
     for _ in range(5):
         assert signup(client, ip, throwaway("burst")).status_code == 200
     assert signup(client, ip, throwaway("burst")).status_code == 429
@@ -107,9 +107,9 @@ def test_signup_rate_limited_per_ip(client, throwaway, ip, auth_service):
 # --------------------------------------------------------------------------
 
 def test_login_lockout_after_failures(client, users):
-    """The app's own limiter locks the account before the correct password
-    is even tried. The real service is locking the same key in parallel —
-    that is the point, and why this runs on a throwaway IP."""
+    """The login limiter locks the account before the correct password is
+    even tried. It locks the IP key too, which is why this runs on a
+    throwaway IP."""
     users("jason")  # create the account and confirm a good login works
     username = users.name("jason")
     headers = {"X-Forwarded-For": users.ip}
