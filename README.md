@@ -23,6 +23,8 @@ What it does:
 - A bulk add mode for shelving a whole stack with one tap per book.
 - A 3D library view: the shelves render as a walkable rotunda with every
   book textured with its cover.
+- Self-contained: `docker compose up --build` brings up the whole stack
+  (Postgres, PostgREST and the app). See "Run it with Docker".
 
 ![The 3D shelves view](docs/screenshots/shelves-arrival.png)
 
@@ -155,10 +157,37 @@ re-enables, changes the password on, or deletes a login. In production,
 run these scripts inside the book-bot container, which has the right env
 (see [`deploy/README.md`](deploy/README.md)).
 
+## Run it with Docker
+
+`compose.yaml` is a self-contained stack: Postgres, PostgREST and book-bot.
+Nothing else needs to be installed or running. Put three secrets in a
+`.env` file next to it (letters and digits only, since they end up in a
+connection URL):
+
+```sh
+printf 'POSTGRES_PASSWORD=%s\nPOSTGREST_DB_PASSWORD=%s\nPOSTGREST_JWT_SECRET=%s\n' \
+    "$(openssl rand -hex 16)" "$(openssl rand -hex 16)" "$(openssl rand -hex 32)" > .env
+docker compose up --build
+```
+
+Open http://localhost:8010 and use "create an account" on the login screen.
+On its first start Postgres creates the two roles PostgREST connects with,
+and the app creates its own schema. Data lives in the `postgres_data`
+volume. Optional `.env` keys: `BOOK_BOT_PORT` (default 8010),
+`SIGNUP_ENABLED`, and `GOOGLE_SERVICE_ACCOUNT` for Google Books metadata
+(without it the app uses Open Library alone). The account scripts run in
+the container, for example
+`docker compose exec book-bot uv run python scripts/manage_user.py show --username <name>`.
+
+Already running Postgres and PostgREST? `compose.external.yaml` runs the app
+alone against them; its header lists the settings and the two roles your
+Postgres needs.
+
 ## Run it locally
 
-Local development runs against the real deployment; there is no offline
-mode. `.env` (symlinked to `personal_credentials/personal.env`) supplies
+Without Docker, the app runs against an existing Postgres and PostgREST;
+there is no offline mode. `.env` (symlinked to
+`personal_credentials/personal.env` on the author's machines) supplies
 `POSTGREST_URL`, `JWT_SECRET` and the superuser `POSTGRES_*` vars (login
 reads the users table over that connection).
 
@@ -196,8 +225,8 @@ is left behind.
 
 ## Production
 
-See [`deploy/README.md`](deploy/README.md). Idempotent SQL files add the `book_bot` schema, role and
-users to the shared `apps` database (the app applies them itself at
+See [`deploy/README.md`](deploy/README.md). Idempotent SQL files add the
+`book_bot` schema, role and users to the shared `apps` database (the app applies them itself at
 startup), PostgREST gets `book_bot` appended to `PGRST_DB_SCHEMAS`, and
 the app runs with `POSTGREST_URL`/`JWT_SECRET` and the superuser
 `POSTGRES_*` vars set, behind SWAG with HTTPS.
@@ -226,6 +255,8 @@ uv run python scripts/import_scans.py --file ~/SyncthingDB/Book-Bot/HoneyCrisp.j
 
 ```
 app/              FastAPI backend + static frontend (app/static)
+compose.yaml      self-contained stack: Postgres + PostgREST + book-bot
+compose.external.yaml  book-bot alone, against an existing Postgres + PostgREST
 deploy/           idempotent SQL + notes for the shared PostgREST stack
 docs/screenshots/ screenshots of the app
 scripts/          create_user.py, manage_user.py, manage_library.py,
